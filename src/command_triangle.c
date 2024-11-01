@@ -15,6 +15,7 @@
 #include <dirent.h>
 #include <omp.h>
 #include <stdatomic.h>
+#include <ctype.h>
 
 /*** argp wrapper ***/
 struct arg_triangle
@@ -33,6 +34,7 @@ static struct argp_option opt_triangle[] =
 	{"outfile",'o',"<FILE>",0,"Output path [STDOUT]\v",5},
 	{"threads",'p',"<INT>", 0, "Threads number to use \v",6},
 	{"diagonal",'d',0, 0, "set diagonal\v",7},
+	{"exception",'e',"<INT>", 0, "set distance value when XnY == 0 \v",8},
   { 0 }
 };
 
@@ -48,6 +50,7 @@ triangle_opt_t triangle_opt ={
 	.c = 0.0, //control duplicated sample by skip distance < c;
 	.p = 1,
 	.d = 0, //diagonal
+	.e = -1, //abort
 	.qrydir[0] = '\0',
 	.outf[0] = '\0',
 	.gl[0]= '\0',
@@ -67,8 +70,21 @@ static error_t parse_triangle(int key, char* arg, struct argp_state* state) {
 		}
 		case 'c':
 		{
-				triangle_opt.c = atof(arg);
-				break;
+			if(!isdigit(*arg)) {
+				printf("-c requires a positive float numer\n");			 
+				exit(1);
+			}
+			triangle_opt.c = atof(arg);
+			break;
+		}
+		case 'e':
+		{
+			int v = atof(arg);
+			if( v < 1 ) {
+        printf("-e requires a positive numer >= 1 \n");
+        exit(1);
+      }
+      triangle_opt.e = v;
 		}
 		case 'p':
 		{
@@ -81,7 +97,7 @@ static error_t parse_triangle(int key, char* arg, struct argp_state* state) {
 			break;
 		}
 		case 'o':
-		{
+		{	
 			strcpy(triangle_opt.outf, arg);
 			break;
 		}
@@ -253,9 +269,21 @@ int compute_triangle(triangle_opt_t *triangle_opt){
 						}
 					}
 				}
+
+			
 				int X_size = tmp_ct_list[enrolled_qry[er_qn]];
-//				dist = tmp_distance[er_qn] = get_distance(kmerlen,X_size,Y_size,overlap_kmer_cnt[er_qn]);
-				tmp_distance[er_qn] = get_distance(kmerlen,X_size,Y_size,overlap_kmer_cnt[er_qn]);
+				if(overlap_kmer_cnt[er_qn] == 0){
+					if( triangle_opt->e == -1 ) {
+						fprintf(stderr, "XnY == 0 abort: %s\t%s\tK=%d\tX=%d\tY=%d\tXnY=%d\n",qryname[enrolled_qry[er_qn]],qryname[qn], kmerlen,X_size,Y_size,overlap_kmer_cnt[er_qn]);
+						exit(1);
+					}
+					else 
+						tmp_distance[er_qn] = triangle_opt->e;							
+				}
+				else
+					tmp_distance[er_qn] = get_distance(kmerlen,X_size,Y_size,overlap_kmer_cnt[er_qn]);
+	
+	
 	    // Check if the calculated distance meets the condition
     		if (tmp_distance[er_qn] < triangle_opt->c) {
 #pragma omp atomic write

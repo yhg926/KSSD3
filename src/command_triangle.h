@@ -20,6 +20,7 @@ typedef struct triangle_opt
 	double c; //minimal distance to enrolled sketches
 	int p; //threads
 	bool d; //diagnal
+	int e;
   char qrydir[PATHLEN];
   char outf[PATHLEN];
 	char gl[PATHLEN]; // genome list with selection code 	
