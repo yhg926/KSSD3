@@ -1020,7 +1020,7 @@ void mco_cbdco_nobin_dist(dist_opt_val_t *opt_val_in) //currently used version(2
     if( bnum_infile == 0 ) continue;
 
     maplength = (size_t)bnum_infile * mco_dstat_readin.infile_num * sizeof(ctx_obj_ct_t);
-		printf("\rdisf_sz=%lu\trefnum=%d\tqrynum=%d\tnum_mapping_distf=%d\tbatch_qrynum=%d\t%lu\t%lu",disf_sz,mco_dstat_readin.infile_num,
+		printf("\rdisf_sz=%lu\trefnum=%d\tqrynum=%d\tnum_mapping_distf=%d\tbatch_qrynum=%d\t%lu\t%lu\n",disf_sz,mco_dstat_readin.infile_num,
 			co_dstat_readin.infile_num,num_mapping_distf,bnum_infile,maplength,(size_t)b*unitsz_distf_mapped);
 		fflush(stdout);
 
@@ -1528,7 +1528,6 @@ void koc_dist_print_nobin ( const char *distout_dir,unsigned int ref_num, unsign
 void dist_print_nobin (const char *distout_dir,unsigned int ref_num, unsigned int qry_num, unsigned int*ref_ctx_ct_list,
       unsigned int*qry_ctx_ct_list, int num_cof_batch, char (*refname)[PATHLEN], char (*qryfname)[PATHLEN],dist_opt_val_t *opt_val) 
 { // 1. matrix or not? 2. only subset or full columns 3. maximal distance/num of referece reported  
-	
 	if( opt_val->shared_kmerpath[0] != '\0') strcpy(full_distfcode, opt_val->shared_kmerpath );
   else sprintf(full_distfcode,"%s/sharedk_ct.dat",distout_dir);
   int fd;
@@ -1551,6 +1550,7 @@ void dist_print_nobin (const char *distout_dir,unsigned int ref_num, unsigned in
 // initialize output control 	
 	print_ctrl_t outfield;	
 	outfield.metric = opt_val->metric ; // make sure opt_val->metric can not choose Bth 
+	outfield.ctm = opt_val->ctm ;
 	outfield.pfield	= opt_val->outfields;
 	outfield.correction = opt_val->correction;
 	outfield.dthreshold = opt_val->mut_dist_max;
@@ -1591,11 +1591,19 @@ void dist_print_nobin (const char *distout_dir,unsigned int ref_num, unsigned in
 				for(int rid = 0; rid < ref_num; rid++) {			
 					unsigned int X_size = ref_ctx_ct_list[rid];
         	unsigned int XnY_size = ctx_obj_ct[offset + rid]; 
-        	double metric = outfield.metric == Ctm ?
+/* 
+	       	double metric = outfield.metric == Ctm ?
 						  (double) XnY_size / (X_size < outfield.Y_size ? X_size : outfield.Y_size) : // sort by Ctm only id metric is Ctm
 						  (double) XnY_size / (X_size + outfield.Y_size - XnY_size) ; // if metric is Jcd or Bth use Jcd for sort
-
-					
+*/
+	  
+					unsigned int denominator = outfield.metric == Jcd ? X_size + outfield.Y_size - XnY_size
+																	 	:outfield.ctm	== 0 ? (X_size < outfield.Y_size ? X_size : outfield.Y_size) 
+																		:outfield.ctm == 1 ? X_size
+                                    :outfield.Y_size;
+    			double metric = (double) XnY_size / denominator ;
+ 			 	
+				
 					// if equal resluts depened on the order of refid, so make sure any two references are substantially different
 					for(int i = N_max - 1 ; i>=0; i-- ){
 						if(metric > bestNref[i].metric){ // for larger selection, otherwise use < and differnt bestNref[NREF] initialization values
@@ -1641,18 +1649,36 @@ static inline void output_ctrl (unsigned int X_size, unsigned int XnY_size, prin
 		rs = P_K_in_X_XnY * P_K_in_Y_XnY * ( X_XnY_size + Y_XnY_size )
        /(P_K_in_X_XnY + P_K_in_Y_XnY - 2*P_K_in_X_XnY * P_K_in_Y_XnY);
 	}
+/*
 	// tmp is either XuY_size or Min_XY_size
 	unsigned int tmp = outfield->metric == Jcd ? X_size + outfield->Y_size - XnY_size  //XuY_size
   																	:(X_size < outfield->Y_size ? X_size : outfield->Y_size); // Min_XY_size 
 	double metric = ((double)XnY_size - rs) / tmp;
 	double dist = log( GET_MATRIC(outfield->metric,metric) ) / kmerlen;
+*/
+//2024-11-07 : new version 
+	unsigned int denominator;
+	double metric, dist;
+	if(outfield->metric == Jcd){
+		denominator = X_size + outfield->Y_size - XnY_size ;
+		metric = ((double)XnY_size - rs) / denominator;
+		dist = log(1 / (2*metric) + 0.5) / kmerlen ; 
+	}
+	else { // 2024-11-7: add containment options
+		denominator = outfield->ctm == 0 ? (X_size < outfield->Y_size ? X_size : outfield->Y_size) 
+															: outfield->ctm == 1 ? X_size 
+															: outfield->Y_size; 																	
+		metric = ((double)XnY_size - rs) / denominator ;
+		dist = log(1/metric) / kmerlen ; 	
+	}
+		
 	if (dist > 1) dist = 1 ; 
   if( dist > outfield->dthreshold ) { linebuf->len = 0 ; return; };	
 #define LST_PRT_LEN 27 //least print out length: 4*\t+7(-||+4*%u)+2*8(%.6lf) 	
 	snprintf(linebuf->line,LINE_LEN,"%s\t%s\t%u-%u|%u|%u\t%.6lf\t%.6lf",outfield->qname,rname,XnY_size,(unsigned int)rs,X_size, outfield->Y_size, metric, dist);
 	linebuf->len = LST_PRT_LEN + outfield->qry_len + strlen(linebuf->line + LST_PRT_LEN + outfield->qry_len); // search '\0' from linebuf+LST_PRT_LEN+outfield->qry_len to shorten strlen time	
 	if(outfield->pfield > Dst) {
-		double sd = pow(metric*(1 - metric) / tmp, 0.5) ;
+		double sd = pow(metric*(1 - metric) / denominator, 0.5) ;
 		double pv =  0.5 * erfc( metric / sd * pow(0.5,0.5)  ) ;
 		snprintf(linebuf->line + linebuf->len, LINE_LEN - linebuf->len,"\t%E\t%E", pv, pv * outfield->cmprsn_num );
 		linebuf->len += 4 + strlen(linebuf->line + linebuf->len + 4);

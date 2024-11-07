@@ -44,6 +44,7 @@ static struct argp_option opt_dist[] =
 	{"neighborN_max",'N',"INT",0,"max number of nearest reference genomes.[1]\v"},
 	{"mutDist_max",'D',"FLT",0,"max mutation allowed for distance output.[1]\v"},
 	{"metric",'M',"0/1",0,"output metrics: 0: Jaccard/1: Containment [0]\v"},
+	{"containment",'C',"0/1/2",0,"containment option: Min(0)/Qry(1)/Ref(2)[0]\v"},
 	{"outfields",'O',"0/1/2",0,"output fields(latter includes former): Distance/Q-values/Confidence Intervels.[2]\v"},
 	{"correction",333,"0/1",0,"perform correction for shared k-mer counts or not .[0]\v" },
   {"abundance",'A',0,0,"abundance estimate mode.\v"},
@@ -83,6 +84,7 @@ dist_opt_val_t dist_opt_val =
 .num_neigb = 0, //neighborN_max, 0 means all
 .mut_dist_max = 1, //mutDist_max
 .metric = Jcd,
+.ctm = 0, // containment option: min / query / reference
 .outfields = CI,
 .correction = false,
 .abundance = false, // no abundance
@@ -230,6 +232,15 @@ static error_t parse_dist(int key, char* arg, struct argp_state* state) {
 		case 'M':
 		{
 			dist_opt_val.metric = atoi(arg) ;	
+			break;
+		}
+		case 'C':
+		{
+			dist_opt_val.ctm = atoi(arg);
+			if(dist_opt_val.ctm >2 || dist_opt_val.ctm < 0 ){
+				printf("containment option %d should be 0,1 or2\n",dist_opt_val.ctm);
+				exit(1);
+			}
 			break;
 		}
 		case 'O':

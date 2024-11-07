@@ -92,6 +92,7 @@ typedef struct print_ctrl
 {
 	//real print control
 	MTRIC metric;  //metric // make sure are first two element in enum { Jcd, Ctm, Bth } MTRIC (in command_dist_wrap.h);
+	int ctm; // containment option: 0:min 1: qeury: 2:ref;
 	PFIELD pfield; // print out filed
 	bool correction; // use rs correction or not, default not
 	double dthreshold ; // distance threshold, make sure default initialized to 1

@@ -28,6 +28,7 @@ typedef struct dist_opt_val
 	int num_neigb; // distance output filter: num of nearest neight 
 	double mut_dist_max;// distance output filter: maximun allow mutation distance
 	MTRIC	metric;       //set output metric, Jcd, Ctm, Both 
+	int ctm; // containment options: 0:min, 1:query, 2: ref
 	PFIELD outfields;   // set ouput fields
 	bool correction; // if do shared kmer count correction
 	bool abundance;
