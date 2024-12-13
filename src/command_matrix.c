@@ -502,7 +502,7 @@ int compute_matrix(matrix_opt_t *matrix_opt){ //ref is the sketch(es) to be hash
 		fprintf(output,"%s",refname[rn]);
 		for( int qn = 0;  qn < qry_dstat.infile_num; qn++) {
 			double dist = overlap_kmer_cnt[qn] == 0 ? matrix_opt->e
-			: get_distance(kmerlen,X_size,qry_ct_list[qn],overlap_kmer_cnt[qn]) ;
+			: fabs(get_distance(kmerlen,X_size,qry_ct_list[qn],overlap_kmer_cnt[qn])) ;
 			fprintf(output,"\t%lf",dist);			
 		}		
 		fprintf(output,"\n");
