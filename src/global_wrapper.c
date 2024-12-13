@@ -6,7 +6,7 @@
 #include "command_set.h"
 #include "command_reverse.h"
 #include "command_composite.h"
-#include "command_triangle.h"
+#include "command_matrix.h"
 #include <assert.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -65,7 +65,7 @@ static char doc_global[] =
       "  composite\tmetagenomics composition analysis.\n"
 
 "\n"
-      "  triangle\tcompute metrics in a lower triangular matrix.\n"
+      "  matrix\tcompute lower triangular or full matrix.\n"
 
 "\n"
 
@@ -98,8 +98,8 @@ static error_t parse_global(int key, char* arg, struct argp_state* state)
 				cmd_reverse(state);
 			else if(strcmp(arg, "composite") == 0)	
 				cmd_composite(state);		
-			else if(strcmp(arg, "triangle") == 0)
-				cmd_triangle(state);
+			else if(strcmp(arg, "matrix") == 0)
+				cmd_matrix(state);
 			else if(strcmp(arg, "primer") == 0)
 					for(int i = 8;i<52;i++ )
 				 		printf("%llu\n",find_lgst_primer_2pow(i));
