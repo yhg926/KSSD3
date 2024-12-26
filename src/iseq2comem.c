@@ -513,53 +513,77 @@ llong * fastq2koc (char* seqfname, llong *co, char *pipecmd, int Q)
   return co;
 }; // end fastq2koc();
 
-unsigned int write_fqkoc2files(char* cofilename, llong *co)
+
+//20241226: updated from unsigned int write_fqkoc2files(char* cofilename, llong *co)
+unsigned int write_fqkoc2files(char* cofilename, llong *co, bool export_abundance )
 {
   int comp_code_bits = half_ctx_len - drlevel > COMPONENT_SZ ? 4*(half_ctx_len - drlevel - COMPONENT_SZ ) : 0  ;
-  FILE **outf,**abdf; //sketch and occurence files
+  FILE **outf; //sketch and occurence files
   outf = malloc(component_num * sizeof(FILE *));
-	abdf = malloc(component_num * sizeof(FILE *));
   char cofilename_with_component[PATHLEN];
 
-  for(int i=0;i<component_num ;i++)
-  {
+  for(int i=0;i<component_num ;i++){
     sprintf(cofilename_with_component,"%s.%d",cofilename,i);
     if ( (outf[i] = fopen(cofilename_with_component,"wb") ) == NULL )
-      err(errno,"write_fqkoc2files()") ;
-	
-		sprintf(cofilename_with_component,"%s.%d.a",cofilename,i);
-		if ( (abdf[i] = fopen(cofilename_with_component,"wb") ) == NULL )
       err(errno,"write_fqkoc2files()") ;
   };
 
   unsigned int count, wr = 0, newid,compi; //compi: component index
-	unsigned short abdc; //abundance 
-		
 
   for(count=0;count < hashsize; count++)
   {
     if( co[count] > 0 ) {
-			
-			compi = (co[count] >> OCCRC_BIT ) % component_num;
-
+      compi = (co[count] >> OCCRC_BIT ) % component_num;
       newid = (unsigned int)(co[count] >> (comp_code_bits + OCCRC_BIT));
       fwrite( &newid, sizeof(newid),1,outf[compi] );
-			
-			abdc = co[count] & OCCRC_MAX;
-			fwrite( &abdc, sizeof(abdc),1,abdf[compi] );
-		
       wr++;
     }
   }
-
-  for(int i=0;i<component_num ;i++){
-    fclose(outf[i]);
-		fclose(abdf[i]);
-	}
+  for(int i=0;i<component_num ;i++) fclose(outf[i]);
   free(outf);
+  
+  if(!export_abundance) return wr;
+
+	// export abundance	
+	FILE **abdf;
+	abdf = malloc(component_num * sizeof(FILE *));
+	for(int i=0;i<component_num ;i++){
+    sprintf(cofilename_with_component,"%s.%d.a",cofilename,i);
+    if ( (abdf[i] = fopen(cofilename_with_component,"wb") ) == NULL )
+      err(errno,"write_fqkoc2files()") ;
+  };
+
+	unsigned short abdc;
+	for(count=0;count < hashsize; count++) {
+    if( co[count] > 0 ) {
+      compi = (co[count] >> OCCRC_BIT ) % component_num;
+      abdc = co[count] & OCCRC_MAX;
+      fwrite( &abdc, sizeof(abdc),1,abdf[compi] );
+    }
+  }
+
+	for(int i=0;i<component_num ;i++)  fclose(abdf[i]);
+ 
 	free(abdf);
   return wr;
 };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 llong write_fqkoc2file(char* cofilename, llong *co)
 {
@@ -828,13 +852,93 @@ llong * uniq_fasta2co(char* seqfname, llong *co, char * pipecmd) //20220916:mark
 };//end func
 
 
+#define MAX_LINE 256
+llong * mt_reads2koc (char* seqfname, llong *co, char *pipecmd,int p){
+	char *tmp = NULL;  // Buffer for temporary storage
+	char **fq_buff = malloc( MAX_LINE * sizeof(char *) );
+	for (int i = 0; i < MAX_LINE; i++) fq_buff[i] = NULL;  // Initialize fq_buff
+  size_t len_tmp = 0;  // Size of the tmp buffer
+  size_t len_fq[MAX_LINE] = {0};  // Sizes of the fq buffers
+  int l;
+	unsigned int keycount =0 ;
 
+  memset(co,0LLU,hashsize*sizeof(llong));
+  FILE *infp;
+  char fq_fname[PATHLEN];
+  if(pipecmd[0] != '\0') sprintf(fq_fname,"%s %s",pipecmd,seqfname);
+  else sprintf(fq_fname,"%s %s",gzpipe_cmd,seqfname);
+//  else sprintf(fq_fname,"%s",seqfname);
+  if( (infp=popen(fq_fname,"r")) == NULL ) err(errno,"mt_reads2koc():%s",fq_fname);
 
+  while (!feof(infp)){
+  	for (l = 0; l < MAX_LINE; l++) {
+    	// Read the 1st line (header) and discard
+    	if (getline(&tmp, &len_tmp, infp) == -1) break;
+      // Read the 2nd line (sequence) into fq_buff
+      // fq_buff[l] = NULL;  // Initialize the buffer for this sequence
+      if (getline(&fq_buff[l], &len_fq[l], infp) == -1) break;
+       // Read the 3rd line (optional '+') and discard
+      if (getline(&tmp, &len_tmp, infp) == -1) break;
+      // Read the 4th line (quality) and discard
+       if (getline(&tmp, &len_tmp, infp) == -1) break;
+     }
+		
+		
+#pragma omp parallel for num_threads(p) schedule(guided)
+    for (int t = 0 ; t < l ; t++ ){
+      int base = 1; char ch;
+      llong tuple = 0LLU;
+      llong crvstuple = 0LLU;
+      llong unituple = 0LLU;
 
+      for(int pos = 0; (ch = fq_buff[t][pos]) != '\n'; pos++){
+        int basenum = Basemap[(int)ch];
+        if(basenum != DEFAULT ){
+          tuple = ( ( tuple<< 2 ) | (llong)basenum ) & tupmask ;
+          crvstuple = ( crvstuple >> 2 ) + (((llong)basenum^3LLU) << crvsaddmove);
+          base++;
+        }else{ base = 1;continue;}
 
+        if( base > TL ){
+          unituple = tuple < crvstuple ? tuple:crvstuple;
+          unsigned int dim_tup = ((unituple & domask) >> ( (half_outctx_len)*2 ) ) ;
+          llong pfilter = dim_shuf_arr[dim_tup];
+          if( ( pfilter >= dim_end) || (pfilter < dim_start ) ) continue;
+          pfilter = pfilter - dim_start;
+          llong drtuple = ( ( (unituple & undomask)
+            + ( ( unituple & ( ( 1LLU<< ( half_outctx_len*2) ) - 1)) << (TL*2 - half_outctx_len*4) ) )
+            >> ( drlevel*4 ) )
+            +  pfilter ;
 
+          for(unsigned int i=0;i<hashsize;i++){
+            unsigned int n = HASH(drtuple, i, hashsize);
+            if (co[n] == 0LLU){
+#pragma omp atomic write
+            co[n] = (drtuple << OCCRC_BIT) + 1LLU ;
+#pragma omp atomic
+              keycount++;
+              if( keycount > hashlimit )
+                 err(errno,"the context space is too crowd, try rerun the program using -k%d", half_ctx_len + 1);
+              break;
+            }else if ( ( co[n] >> OCCRC_BIT ) == drtuple ) {
+              if( (co[n] & OCCRC_MAX) < OCCRC_MAX )
+#pragma omp atomic
+                 co[n]+=1LLU;
+               break ;
+            }
 
+          }// end kmer hashing for
+        }
+      }// end per read for
+    }// end threads block for
+  }// end file while
+	free(tmp);
+	for(int i = 0; i < MAX_LINE; i++)
+		free(fq_buff[i]);
+  pclose(infp);
 
+  return co;
+}// end mt_shortreads2koc()
 
 
 
