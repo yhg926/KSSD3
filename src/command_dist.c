@@ -311,6 +311,7 @@ int get_hashsz(dim_shuffle_t *dim_shuffle_in )
 
 //test if parent_path contain file dstat_f, return full path if has otherwise return NULL
 //orginally develop fo test dstat_f , but can generally test other file 
+/* //mv to global_basic.c
 const char* test_get_fullpath(const char *parent_path, const char *dstat_f)
 {
 	struct stat path_stat;
@@ -332,7 +333,7 @@ const char* test_get_fullpath(const char *parent_path, const char *dstat_f)
 	else
 		return NULL;
 };
-
+*/
 const char * run_stageI (dist_opt_val_t *opt_val, infile_tab_t *seqfile_stat,
 					 int* shuffled_seqfname_ind, const char *co_dir, int p_fit_mem)
 {
@@ -372,7 +373,7 @@ const char * run_stageI (dist_opt_val_t *opt_val, infile_tab_t *seqfile_stat,
 			//20190910 caution!!!: assume pipecmd generated fastq format to pipe 
       if(isOK_fmt_infile(seqfname,fastq_fmt,FQ_FMT_SZ) || opt_val->pipecmd[0]!='\0'){
 					co = mt_reads2koc(seqfname,CO[tid],opt_val->pipecmd, p_fit_mem);		
-					ctx_ct_list[i] = write_fqkoc2files(cofname,co,opt_val->abundance); //write_fqkoc2file(cofname,co);
+					ctx_ct_list[i] = write_fqkoc2files(cofname,co,opt_val->kmerocrs,opt_val->abundance); //write_fqkoc2file(cofname,co);
        }
        else{
 				if(opt_val->abundance) {

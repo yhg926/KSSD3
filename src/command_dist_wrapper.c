@@ -170,8 +170,8 @@ static error_t parse_dist(int key, char* arg, struct argp_state* state) {
 		}
 		case 'n':
 		{
-			if( atoi(arg) > 7 ) {
-				dist_opt_val.kmerocrs = 7;
+			if( atoi(arg) > 65536 ) {
+				dist_opt_val.kmerocrs = 65536;
 				warnx("-n argument is larger than Max, it has been set to 7, ignorned -n %d ",atoi(arg));
 			}else if( atoi(arg) < 1 ){
 				dist_opt_val.kmerocrs = 1;

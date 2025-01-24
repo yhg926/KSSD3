@@ -515,13 +515,14 @@ llong * fastq2koc (char* seqfname, llong *co, char *pipecmd, int Q)
 
 
 //20241226: updated from unsigned int write_fqkoc2files(char* cofilename, llong *co)
-unsigned int write_fqkoc2files(char* cofilename, llong *co, bool export_abundance )
+unsigned int write_fqkoc2files(char* cofilename, llong *co, int n, bool export_abundance )
 {
   int comp_code_bits = half_ctx_len - drlevel > COMPONENT_SZ ? 4*(half_ctx_len - drlevel - COMPONENT_SZ ) : 0  ;
   FILE **outf; //sketch and occurence files
   outf = malloc(component_num * sizeof(FILE *));
   char cofilename_with_component[PATHLEN];
-
+	unsigned short N = n >0 && n < 65536 ? n: 1;    
+	
   for(int i=0;i<component_num ;i++){
     sprintf(cofilename_with_component,"%s.%d",cofilename,i);
     if ( (outf[i] = fopen(cofilename_with_component,"wb") ) == NULL )
@@ -532,7 +533,7 @@ unsigned int write_fqkoc2files(char* cofilename, llong *co, bool export_abundanc
 
   for(count=0;count < hashsize; count++)
   {
-    if( co[count] > 0 ) {
+    if( co[count] & OCCRC_MAX >= N ) { //if( co[count] > 0 )
       compi = (co[count] >> OCCRC_BIT ) % component_num;
       newid = (unsigned int)(co[count] >> (comp_code_bits + OCCRC_BIT));
       fwrite( &newid, sizeof(newid),1,outf[compi] );
@@ -555,7 +556,7 @@ unsigned int write_fqkoc2files(char* cofilename, llong *co, bool export_abundanc
 
 	unsigned short abdc;
 	for(count=0;count < hashsize; count++) {
-    if( co[count] > 0 ) {
+    if( co[count] & OCCRC_MAX >= N ) {
       compi = (co[count] >> OCCRC_BIT ) % component_num;
       abdc = co[count] & OCCRC_MAX;
       fwrite( &abdc, sizeof(abdc),1,abdf[compi] );
@@ -938,7 +939,7 @@ llong * mt_reads2koc (char* seqfname, llong *co, char *pipecmd,int p){
   pclose(infp);
 
   return co;
-}// end mt_shortreads2koc()
+}// end mt_reads2koc()
 
 
 

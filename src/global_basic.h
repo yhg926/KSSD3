@@ -47,6 +47,7 @@
 //gid array linked list: .mco genome id+obj array size
 #define GID_ARR_SZ 16 //32 //short arr[GID_ARR_SZ] 
 #define BBILLION 1073741824  //binary billion
+
 /*type define */
 typedef unsigned long long int llong;
 /*argp wrapper*/
@@ -113,6 +114,7 @@ infile_tab_t * organize_infile_frm_arg (int num_remaining_args, char ** remainin
 //per bin get file basename and estimate .co files (before dimension reduction) memory usage.
 bin_stat_t * get_bin_basename_stat(infile_entry_t* organized_infile_tab, int *shuffle_arr,int binsz);
 
+/*legency combco stat file type*/
 typedef struct co_dirstat
 {
   unsigned int shuf_id;
@@ -124,6 +126,18 @@ typedef struct co_dirstat
   //int comp_sz[comp_num * infile_num]; // do this if storage all .co per mco bin in one file
   llong all_ctx_ct;
 } co_dstat_t;
+
+/*comblco stat file type*/
+typedef struct dim_sketch_stat
+{
+  unsigned int hash_id; // sketching type coding
+  bool koc;
+  int klen; // full length of kmer, 8..31
+  int hclen; // half context length,
+  int holen; // half outer object length, 1..64
+  int drfold; //dimension reduction fold 2^n , 0..32
+  int infile_num;
+} dim_sketch_stat_t;
 
 //********** input file formats test ********************//
 
@@ -254,7 +268,10 @@ void replaceChar(char *str, char oldChar, char newChar);
 
 int str_suffix_match(char *str, const char *suf); 
 const char * get_pathname(const char *fullpath, const char *suf);
-const char* test_get_fullpath(const char *parent_path, const char *dstat_f);
+char* test_get_fullpath(const char *parent_path, const char *dstat_f);
+void *read_from_file(const char *file_path, size_t *file_size) ;
+int write_to_file(const char *file_path, const void *data, size_t data_size) ;
+
 // infile fmt count struct
 typedef struct
 {
@@ -266,6 +283,13 @@ typedef struct
 // infile fmt count function 
 infile_fmt_count_t *infile_fmt_count ( infile_tab_t * infile_tab );
 
+// uint64_t sketch
+extern const char sketch_stat[];
+extern const char combined_sketch_suffix[];
+extern const char idx_sketch_suffix[];
+extern const char lpan_prefix[];
+extern const char luniq_pan_prefix[]; 
+//legency uint32_t sketch
 extern const char co_dstat[];
 extern const char skch_prefix[];
 extern const char idx_prefix[];
@@ -278,6 +302,8 @@ extern const char mco_idx_prefix[];
 
  
 typedef unsigned int ctx_obj_ct_t;
+
+int mkdir_p(const char *path);
 
 #define H1(K,HASH_SZ) ((K)%(HASH_SZ))
 #define H2(K,HASH_SZ) ( 1 + (K) % ( (HASH_SZ) - 1 ) )

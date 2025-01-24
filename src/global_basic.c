@@ -482,3 +482,160 @@ void replaceChar(char *str, char oldChar, char newChar) {
         str++;
     }
 }
+
+
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <string.h>
+#include <errno.h>
+#include <stdio.h>
+
+#ifdef _WIN32
+#include <direct.h>
+#define MKDIR(path) _mkdir(path)
+#else
+#include <unistd.h>
+#define MKDIR(path) mkdir(path, 0755)
+#endif
+
+int mkdir_p(const char *path) {
+    char temp[1024];
+    size_t len = strlen(path);
+    struct stat st;
+
+    // Copy the path to a temporary buffer
+    snprintf(temp, sizeof(temp), "%s", path);
+
+    // Remove trailing slash if present
+    if (temp[len - 1] == '/')
+        temp[len - 1] = '\0';
+
+    // Create directories recursively
+    for (char *p = temp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0'; // Temporarily terminate the string
+            if (stat(temp, &st) != 0) { // If the directory doesn't exist
+                if (MKDIR(temp) != 0 && errno != EEXIST) {
+                    perror("mkdir");
+                    return -1;
+                }
+            }
+            *p = '/'; // Restore the slash
+        }
+    }
+
+    // Create the final directory
+    if (stat(temp, &st) != 0) {
+        if (MKDIR(temp) != 0 && errno != EEXIST) {
+            perror("mkdir");
+            return -1;
+        }
+    }
+
+    return 0; // Success
+}
+
+//test if parent_path contain file dstat_f, return full path if has otherwise return NULL
+//orginally develop fo test dstat_f , but can generally test other file
+char* test_get_fullpath(const char *parent_path, const char *dstat_f)
+{
+  struct stat path_stat;
+  if( stat(parent_path, &path_stat) < 0 )
+    err(errno,"test_get_fullpath()::%s",parent_path);
+  if( S_ISDIR(path_stat.st_mode) ){
+    char* fullpath = malloc(PATHLEN+1);
+    sprintf((char *)fullpath,"%s/%s", parent_path, dstat_f);
+    FILE *fp;
+    if ( (fp = fopen(fullpath,"rb")) != NULL ){
+      fclose(fp);
+      return fullpath;
+    }
+    else{
+      free((char*)fullpath);
+      return NULL;
+    }
+  }
+  else
+    return NULL;
+};
+
+
+
+//by chatgpt 
+//fread wrapper to read the entire file into memory
+void *read_from_file(const char *file_path, size_t *file_size) {
+    // Open the file in binary read mode
+    FILE *file = fopen(file_path, "rb");
+    if (!file) {
+        perror("Error opening file for reading");
+        return NULL;
+    }
+
+    // Seek to the end of the file to determine its size
+    if (fseek(file, 0, SEEK_END) != 0) {
+        perror("Error seeking to end of file");
+        fclose(file);
+        return NULL;
+    }
+
+    // Get the file size
+    long size = ftell(file);
+    if (size == -1) {
+        perror("Error getting file size");
+        fclose(file);
+        return NULL;
+    }
+
+    // Seek back to the beginning of the file
+    rewind(file);
+
+    // Allocate memory to hold the file contents
+    void *buffer = malloc(size);
+    if (!buffer) {
+        perror("Error allocating memory");
+        fclose(file);
+        return NULL;
+    }
+
+    // Read the entire file into memory
+    size_t read_count = fread(buffer, 1, size, file);
+    if (read_count != (size_t)size) {
+        perror("Error reading file into memory");
+        free(buffer);
+        fclose(file);
+        return NULL;
+    }
+
+    // Close the file
+    fclose(file);
+
+    // Set the file size if a valid pointer is provided
+    if (file_size) {
+        *file_size = (size_t)size;
+    }
+
+    return buffer;
+}
+
+// fwrite wrapper to write data to a file
+int write_to_file(const char *file_path, const void *data, size_t data_size) {
+    // Open the file for binary writing
+    FILE *file = fopen(file_path, "wb");
+    if (!file) {
+        perror("Error opening file for writing");
+        return -1;
+    }
+
+    // Write the data to the file
+    size_t write_count = fwrite(data, 1, data_size, file);
+    if (write_count != data_size) {
+        perror("Error writing to file");
+        fclose(file);
+        return -1;
+    }
+
+    // Close the file
+    fclose(file);
+    return 0;
+}
+

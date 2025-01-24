@@ -20,7 +20,7 @@ llong write_fqco2file(char* cofilename, llong *co);
 llong wrt_co2cmpn_use_inn_subctx(char* cofilename, llong *co);
 llong writeco2file(char* cofilename, llong *co);
 llong write_fqkoc2file(char* cofilename, llong *co);
-unsigned int write_fqkoc2files(char*, llong *, bool);
+unsigned int write_fqkoc2files(char*, llong *, int, bool);
 
 int reads2mco(char* seqfname,const char *co_dir, char * pipecmd);
 

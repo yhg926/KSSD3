@@ -2,8 +2,9 @@
 #include "global_wrapper.h"
 #include "global_basic.h"
 #include "command_shuffle.h"
+#include "command_sketch_wrapper.h"
 #include "command_dist_wrapper.h" //#include "command_align_wrapper.h"
-#include "command_set.h"
+#include "command_set_wrapper.h"
 #include "command_reverse.h"
 #include "command_composite.h"
 #include "command_matrix.h"
@@ -53,6 +54,8 @@ static char doc_global[] =
 	
       "Supported subcommands are:\n"
 "\n"
+      "  sketch  \tperform sequences sketching. \n"
+"\n"
       "  shuffle  \tshuffle/sampling k-mer substring space.\n"
 "\n"
       "  dist     \tsequences sketching and distance estimation.\n"
@@ -94,6 +97,10 @@ static error_t parse_global(int key, char* arg, struct argp_state* state)
 			{				
 				cmd_dist(state); //cmd_align
 			}
+      else if(strcmp(arg, "sketch") == 0)
+      {
+        cmd_sketch(state); //cmd_align
+      }
 			else if(strcmp(arg, "reverse") == 0)
 				cmd_reverse(state);
 			else if(strcmp(arg, "composite") == 0)	

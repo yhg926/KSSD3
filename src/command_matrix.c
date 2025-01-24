@@ -87,6 +87,7 @@ static error_t parse_matrix(int key, char* arg, struct argp_state* state) {
         exit(1);
       }
       matrix_opt.e = v;
+			break;
 		}
 		case 'p':
 		{
