@@ -269,8 +269,11 @@ void replaceChar(char *str, char oldChar, char newChar);
 int str_suffix_match(char *str, const char *suf); 
 const char * get_pathname(const char *fullpath, const char *suf);
 char* test_get_fullpath(const char *parent_path, const char *dstat_f);
+char* test_create_fullpath(const char *parent_path, const char *dstat_f);
+int file_exists_in_folder(const char *folder, const char *filename);
 void *read_from_file(const char *file_path, size_t *file_size) ;
-int write_to_file(const char *file_path, const void *data, size_t data_size) ;
+void write_to_file(const char *file_path, const void *data, size_t data_size) ;
+void concat_and_write_to_file(const char *file_path, const void *block1, size_t size1, const void *block2, size_t size2) ;
 
 // infile fmt count struct
 typedef struct
@@ -286,6 +289,7 @@ infile_fmt_count_t *infile_fmt_count ( infile_tab_t * infile_tab );
 // uint64_t sketch
 extern const char sketch_stat[];
 extern const char combined_sketch_suffix[];
+extern const char combined_ab_suffix[];
 extern const char idx_sketch_suffix[];
 extern const char lpan_prefix[];
 extern const char luniq_pan_prefix[]; 
@@ -304,11 +308,27 @@ extern const char mco_idx_prefix[];
 typedef unsigned int ctx_obj_ct_t;
 
 int mkdir_p(const char *path);
+void free_all(void *first, ...);
 
 #define H1(K,HASH_SZ) ((K)%(HASH_SZ))
 #define H2(K,HASH_SZ) ( 1 + (K) % ( (HASH_SZ) - 1 ) )
 #define HASH(K,I,HASH_SZ) ( ( H1(K,HASH_SZ) + I * H2(K,HASH_SZ) ) % HASH_SZ )
 #define LOG2(X) ((unsigned) (8*sizeof (unsigned long long) - __builtin_clzll((X)) - 1))
+
+//vector type and methods
+typedef struct {
+    void *data;       // Pointer to the array data
+    size_t element_size; // Size of each element
+    size_t size;       // Current number of elements
+    size_t capacity;   // Allocated capacity
+} Vector;
+
+void vector_init(Vector *vec, size_t element_size);
+void vector_free(Vector *vec) ;
+void vector_push(Vector *vec, const void *element);
+void *vector_get(Vector *vec, size_t index);
+
+
 
 #endif
 

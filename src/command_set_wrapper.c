@@ -15,7 +15,7 @@ static struct argp_option opt_set[] =
 	{"subtract",'s',"<pan>", 0,"subtract the pan-sketch from all input sketches.\v",2 },
 	{"intsect",'i',"<pan>", 0, "intersect with the pan-sketch for all input sketches.\v",2},
 	{"uniq_union",'q',0,  0, "get uniq union set of the sketches.\v",3 },
-	{"combin_pan",'c',0,  0, "combine pan files to combco file.\v",4 },
+//	{"combin_pan",'c',0,  0, "combine pan files to combco file.\v",4 },
 	{"threads",'p',"<INT>",  0, "number of threads.\v",4 },
 	{"print",'P',0,  0, "print genome names.\v",4 },
 	{"grouping",'g',"<file.tsv>",0,"grouping genomes by input category file.\v",4},
@@ -165,37 +165,37 @@ int cmd_set(struct argp_state* state)
 	// operation and arg control
 	if(argc >1){	
 		if(set_opt.operation == 2){
-			if(test_get_fullpath(set_opt.insketchpath,co_dstat) != NULL)
+			if(file_exists_in_folder(set_opt.insketchpath,co_dstat) )
 				return sketch_union(&set_opt); 
-			else if(test_get_fullpath(set_opt.insketchpath,sketch_stat) != NULL)
+			else if(file_exists_in_folder(set_opt.insketchpath,sketch_stat))
 				return lsketch_union(&set_opt);			
 		}
 		else if(set_opt.operation == 3){
-	  	if(test_get_fullpath(set_opt.insketchpath,co_dstat) != NULL)
+	  	if(file_exists_in_folder(set_opt.insketchpath,co_dstat))
 				return uniq_sketch_union(&set_opt) ;
-      else if(test_get_fullpath(set_opt.insketchpath,sketch_stat) != NULL)
+      else if(file_exists_in_folder(set_opt.insketchpath,sketch_stat))
         return lsketch_union(&set_opt);
 		}
 		else if(set_opt.operation == 4){
 			return combin_pans(&set_opt);
 		}
 		else if(set_opt.operation == 0 || set_opt.operation == 1 ){
-			if(test_get_fullpath(set_opt.pansketchpath,co_dstat) != NULL)
+			if(file_exists_in_folder(set_opt.pansketchpath,co_dstat))
 				return sketch_operate(&set_opt) ;
-			else if (test_get_fullpath(set_opt.pansketchpath,sketch_stat) != NULL)
+			else if (file_exists_in_folder(set_opt.pansketchpath,sketch_stat))
 				 return lsketch_operate(&set_opt) ;
 		}
 		else {
 			if(set_opt.P) {
-				if(test_get_fullpath(set_opt.insketchpath,co_dstat) != NULL) print_gnames(&set_opt);
-				else if(test_get_fullpath(set_opt.insketchpath,sketch_stat) != NULL) print_lco_gnames(&set_opt);
+				if(file_exists_in_folder(set_opt.insketchpath,co_dstat)) print_gnames(&set_opt);
+				else if(file_exists_in_folder(set_opt.insketchpath,sketch_stat)) print_lco_gnames(&set_opt);
 				else printf("%s is not a valid sketch\n",set_opt.insketchpath );
 
 			}
 			else if (set_opt.subsetf[0]!='\0') {
-				if(test_get_fullpath(set_opt.insketchpath,co_dstat) != NULL)
+				if(file_exists_in_folder(set_opt.insketchpath,co_dstat))
 					return grouping_genomes(&set_opt); // combin_subset_pans(set_opt.subsetf);
-				else if(test_get_fullpath(set_opt.insketchpath,sketch_stat) != NULL)
+				else if(file_exists_in_folder(set_opt.insketchpath,sketch_stat))
 					return lgrouping_genomes(&set_opt);
 
 			}

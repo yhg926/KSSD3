@@ -551,39 +551,58 @@ char* test_get_fullpath(const char *parent_path, const char *dstat_f)
       return fullpath;
     }
     else{
+//			printf("%s(): %s do not exists\n",__func__,fullpath);
       free((char*)fullpath);
       return NULL;
     }
   }
-  else
+  else{
+//		printf("%s()::%s is not a director\n",__func__,parent_path);
     return NULL;
+	}
 };
 
+char* test_create_fullpath(const char *parent_path, const char *dstat_f){
+	mkdir_p(parent_path);
+	char* fullpath = malloc(PATHLEN+1);
+	sprintf((char *)fullpath,"%s/%s", parent_path, dstat_f);
 
+	 FILE *fp;
+   if ( (fp = fopen(fullpath,"wb")) != NULL ){
+      fclose(fp);
+      return fullpath;
+    }
+    else{
+      free((char*)fullpath);
+      return NULL;
+    }		
+}
 
-//by chatgpt 
-//fread wrapper to read the entire file into memory
+int file_exists_in_folder(const char *folder, const char *filename) {
+    char filepath[1024]; // Buffer to store the full file path
+    snprintf(filepath, sizeof(filepath), "%s/%s", folder, filename); // Construct path    
+    // Check if the file exists
+    return access(filepath, F_OK) == 0;
+}
+
+//by chatgpt
+// fread wrapper to read the entire file into memory
 void *read_from_file(const char *file_path, size_t *file_size) {
     // Open the file in binary read mode
     FILE *file = fopen(file_path, "rb");
     if (!file) {
-        perror("Error opening file for reading");
-        return NULL;
+        err(EXIT_FAILURE, "%s(): Error opening file '%s'", __func__, file_path);
     }
 
     // Seek to the end of the file to determine its size
     if (fseek(file, 0, SEEK_END) != 0) {
-        perror("Error seeking to end of file");
-        fclose(file);
-        return NULL;
+        err(EXIT_FAILURE, "%s(): Failed to seek to the end of file '%s'", __func__, file_path);
     }
 
     // Get the file size
     long size = ftell(file);
     if (size == -1) {
-        perror("Error getting file size");
-        fclose(file);
-        return NULL;
+        err(EXIT_FAILURE, "%s(): Failed to determine file size for '%s'", __func__, file_path);
     }
 
     // Seek back to the beginning of the file
@@ -592,18 +611,16 @@ void *read_from_file(const char *file_path, size_t *file_size) {
     // Allocate memory to hold the file contents
     void *buffer = malloc(size);
     if (!buffer) {
-        perror("Error allocating memory");
         fclose(file);
-        return NULL;
+        err(EXIT_FAILURE, "%s(): Memory allocation failed for file '%s'", __func__, file_path);
     }
 
     // Read the entire file into memory
     size_t read_count = fread(buffer, 1, size, file);
     if (read_count != (size_t)size) {
-        perror("Error reading file into memory");
         free(buffer);
         fclose(file);
-        return NULL;
+        err(EXIT_FAILURE, "%s(): Failed to read the file '%s' into memory", __func__, file_path);
     }
 
     // Close the file
@@ -617,25 +634,112 @@ void *read_from_file(const char *file_path, size_t *file_size) {
     return buffer;
 }
 
-// fwrite wrapper to write data to a file
-int write_to_file(const char *file_path, const void *data, size_t data_size) {
-    // Open the file for binary writing
+// fwrite wrapper to write memory to a file
+void write_to_file(const char *file_path, const void *data, size_t data_size) {
+    // Open the file in binary write mode
     FILE *file = fopen(file_path, "wb");
     if (!file) {
-        perror("Error opening file for writing");
-        return -1;
+        err(EXIT_FAILURE, "%s(): Error opening file '%s' for writing", __func__, file_path);
     }
-
     // Write the data to the file
     size_t write_count = fwrite(data, 1, data_size, file);
     if (write_count != data_size) {
-        perror("Error writing to file");
         fclose(file);
-        return -1;
+        err(EXIT_FAILURE, "%s(): Failed to write data to file '%s'", __func__, file_path);
     }
 
     // Close the file
-    fclose(file);
-    return 0;
+    if (fclose(file) != 0) {
+        err(EXIT_FAILURE, "%s(): Failed to close file '%s'", __func__, file_path);
+    }
 }
+
+void concat_and_write_to_file(const char *file_path, const void *block1, size_t size1, const void *block2, size_t size2) {
+    // Calculate the total size of the new block
+    size_t total_size = size1 + size2;
+
+    // Allocate memory for the new block
+    void *joint_block = malloc(total_size);
+    if (!joint_block) {
+        err(EXIT_FAILURE, "concat_and_write_to_file(): Memory allocation failed");
+    }
+
+    // Copy the first block into the new block
+    memcpy(joint_block, block1, size1);
+
+    // Append the second block after the first
+    memcpy((char *)joint_block + size1, block2, size2);
+
+    // Write the concatenated block to the file
+    write_to_file(file_path, joint_block, total_size);
+
+    // Free the allocated memory
+    free(joint_block);
+}
+
+
+//vector
+
+// Initialize the vector
+void vector_init(Vector *vec, size_t element_size) {
+    vec->data = NULL;
+    vec->element_size = element_size;
+    vec->size = 0;
+    vec->capacity = 0;
+}
+
+// Free the vector's memory
+void vector_free(Vector *vec) {
+    free(vec->data);
+    vec->data = NULL;
+    vec->size = 0;
+    vec->capacity = 0;
+}
+
+// Add an element to the vector
+void vector_push(Vector *vec, const void *element) {
+    if (vec->size == vec->capacity) {
+        size_t new_capacity = vec->capacity == 0 ? 4 : vec->capacity * 2;
+        vec->data = realloc(vec->data, new_capacity * vec->element_size);
+        if (vec->data == NULL) {
+            fprintf(stderr, "Failed to allocate memory\n");
+            exit(EXIT_FAILURE);
+        }
+        vec->capacity = new_capacity;
+    }
+    memcpy((char *)vec->data + vec->size * vec->element_size, element, vec->element_size);
+    vec->size++;
+}
+
+// Get an element from the vector (by index)
+void *vector_get(Vector *vec, size_t index) {
+    if (index >= vec->size) {
+        fprintf(stderr, "Index out of bounds\n");
+        exit(EXIT_FAILURE);
+    }
+    return (char *)vec->data + index * vec->element_size;
+} 
+
+//free all
+#include <stdarg.h>
+
+void free_all(void *first, ...) {
+    va_list args;
+    va_start(args, first);
+
+    void *ptr = first;
+    while (ptr != NULL) {
+        free(ptr);
+        ptr = va_arg(args, void *);
+    }
+
+    va_end(args);
+}
+
+
+
+
+
+
+
 
