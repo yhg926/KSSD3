@@ -35,7 +35,7 @@ void compute_sketch(sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat){
 		sprintf(tmp_fname,"%s/%d.%s",sketch_opt_val->outdir,i,sketch_suffix);
 		// sketching all genomes individually
 	 	tmp_ct_list[i+1] = reads2sketch64( (infile_stat->organized_infile_tab)[i].fpath, tmp_fname, sketch_opt_val->abundance);
-		printf("sketching %s completed!\tsketch size=%lu\n",(infile_stat->organized_infile_tab)[i].fpath,tmp_ct_list[i+1]);
+		printf("\rsketching %s completed!\tsketch size=%lu",(infile_stat->organized_infile_tab)[i].fpath,tmp_ct_list[i+1]);
 	}
 //combine *.lco to comblco
 	sprintf(tmp_fname,"%s/%s",sketch_opt_val->outdir,combined_sketch_suffix);

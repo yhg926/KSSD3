@@ -208,6 +208,7 @@ static inline int isOK_fmt_infile (char* fname, const char *test_fmt[], int test
 #include <sys/mman.h>
 #include <fcntl.h> // open function
 #include <unistd.h> //close function
+#include <stdint.h>
 
 static inline void check (int test, const char * message, ...)
 {
@@ -270,6 +271,7 @@ int str_suffix_match(char *str, const char *suf);
 const char * get_pathname(const char *fullpath, const char *suf);
 char* test_get_fullpath(const char *parent_path, const char *dstat_f);
 char* test_create_fullpath(const char *parent_path, const char *dstat_f);
+char* format_string(const char* format, ...);
 int file_exists_in_folder(const char *folder, const char *filename);
 void *read_from_file(const char *file_path, size_t *file_size) ;
 void write_to_file(const char *file_path, const void *data, size_t data_size) ;
@@ -328,8 +330,24 @@ void vector_free(Vector *vec) ;
 void vector_push(Vector *vec, const void *element);
 void *vector_get(Vector *vec, size_t index);
 
+// union type for both combco and comblco sketch
+typedef struct {
+    int stat_type;                  // 1 = 32-bit sketch, 2 = 64-bit sketch
+    void *mem_stat;                 // Pointer to memory-mapped or read data
+    char (*gname)[PATHLEN];       // Query names
+    uint64_t *comb_sketch;           // Combined k-mer counts
+    uint64_t *sketch_index;     // Combined k-mer index
+    int infile_num;                 // Number of input files
+    int kmerlen;                    // K-mer length
+	unsigned int hash_id;           // hash_id or shuf_id
+    union {
+        co_dstat_t co_stat_val;     // 32-bit sketch statistics
+        dim_sketch_stat_t lco_stat_val; // 64-bit sketch statistics
+    } stats;                        // Union of the two possible types
+} unify_sketch_t;
 
-
+unify_sketch_t* generic_sketch_parse(const char *qrydir) ;
+void free_unify_sketch(unify_sketch_t *result) ;
 #endif
 
 

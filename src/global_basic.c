@@ -736,10 +736,135 @@ void free_all(void *first, ...) {
     va_end(args);
 }
 
+// Wrapper for snprintf to return the concatenated string directly
+char* format_string(const char* format, ...) {
+    va_list args;
 
+    // Step 1: Determine the length of the formatted string
+    va_start(args, format);
+    int len = vsnprintf(NULL, 0, format, args); // Get required buffer size
+    va_end(args);
 
+    if (len < 0) {
+        return NULL; // vsnprintf failed
+    }
 
+    // Step 2: Allocate memory for the formatted string
+    char* result = (char*)malloc((len + 1) * sizeof(char)); // +1 for null terminator
+    if (!result) {
+        return NULL; // Memory allocation failed
+    }
 
+    // Step 3: Format the string into the allocated buffer
+    va_start(args, format);
+    vsnprintf(result, len + 1, format, args); // Write the formatted string
+    va_end(args);
+
+    return result;
+}
+
+/*
+unify_sketch_t*  generic_sketch_parse(const char *qrydir) {
+    unify_sketch_t result = {0}; size_t file_size;
+
+    if (file_exists_in_folder(qrydir, co_dstat)) {
+        result.stat_type = 1;
+        result.mem_stat = read_from_file(test_get_fullpath(qrydir, co_dstat), &file_size);
+        memcpy(&result.stats.co_stat_val, result.mem_stat, sizeof(co_dstat_t));
+        if (result.stats.co_stat_val.comp_num > 1) err(EXIT_FAILURE, "%s(): comp_num must be 1. Found: %d",__func__,result.stats.co_stat_val.comp_num);
+
+		result.hash_id = result.stats.co_stat_val.shuf_id;
+        result.infile_num = result.stats.co_stat_val.infile_num;
+        result.kmerlen = result.stats.co_stat_val.kmerlen;
+        result.gname = (char (*)[PATHLEN])(result.mem_stat + sizeof(co_dstat_t) + sizeof(ctx_obj_ct_t) * result.infile_num);
+
+        unsigned int *tmp_combco = read_from_file(format_string("%s/%s.0", qrydir, skch_prefix), &file_size);
+        size_t *tmp_index_combco = read_from_file(format_string("%s/%s.0", qrydir, idx_prefix), &file_size);
+        result.comb_sketch = malloc(sizeof(uint64_t) * tmp_index_combco[result.infile_num]);
+        for (uint64_t i = 0; i < tmp_index_combco[result.infile_num]; i++)  result.comb_sketch[i] = tmp_combco[i];        
+
+        if (sizeof(size_t) == sizeof(uint64_t)) result.sketch_index = (uint64_t *)tmp_index_combco;
+        else {
+            result.sketch_index = malloc(sizeof(uint64_t) * (result.infile_num + 1));
+            for (int i = 0; i < result.infile_num + 1; i++) result.sketch_index[i] = tmp_index_combco[i];           
+            free(tmp_index_combco);
+        }
+    } else if (file_exists_in_folder(qrydir, sketch_stat)) {
+        result.stat_type = 2;
+        result.mem_stat = read_from_file(test_get_fullpath(qrydir, sketch_stat), &file_size);
+        memcpy(&result.stats.lco_stat_val, result.mem_stat, sizeof(dim_sketch_stat_t));
+
+		result.hash_id = result.stats.lco_stat_val.hash_id;
+        result.infile_num = result.stats.lco_stat_val.infile_num;
+        result.kmerlen = result.stats.lco_stat_val.klen;
+        result.gname = (char (*)[PATHLEN])(result.mem_stat + sizeof(dim_sketch_stat_t));
+        result.comb_sketch = read_from_file(test_get_fullpath(qrydir, combined_sketch_suffix), &file_size);
+        result.sketch_index = read_from_file(test_get_fullpath(qrydir, idx_sketch_suffix), &file_size);
+    } else err(EXIT_FAILURE, "%s(): No valid sketch data found in folder: %s",__func__, qrydir); 
+
+    return &result;
+}
+*/
+unify_sketch_t* generic_sketch_parse(const char *qrydir) {
+    unify_sketch_t *result = malloc(sizeof(unify_sketch_t)); // Dynamically allocate memory
+    if (result == NULL) {
+        err(EXIT_FAILURE, "%s(): Memory allocation failed", __func__);
+    }
+    size_t file_size;
+
+    if (file_exists_in_folder(qrydir, co_dstat)) {
+        result->stat_type = 1;
+        result->mem_stat = read_from_file(test_get_fullpath(qrydir, co_dstat), &file_size);
+        memcpy(&result->stats.co_stat_val, result->mem_stat, sizeof(co_dstat_t));
+        if (result->stats.co_stat_val.comp_num > 1) {
+            err(EXIT_FAILURE, "%s(): comp_num must be 1. Found: %d", __func__, result->stats.co_stat_val.comp_num);
+        }
+
+        result->hash_id = result->stats.co_stat_val.shuf_id;
+        result->infile_num = result->stats.co_stat_val.infile_num;
+        result->kmerlen = result->stats.co_stat_val.kmerlen;
+        result->gname = (char (*)[PATHLEN])(result->mem_stat + sizeof(co_dstat_t) + sizeof(ctx_obj_ct_t) * result->infile_num);
+
+        unsigned int *tmp_combco = read_from_file(format_string("%s/%s.0", qrydir, skch_prefix), &file_size);
+        size_t *tmp_index_combco = read_from_file(format_string("%s/%s.0", qrydir, idx_prefix), &file_size);
+        result->comb_sketch = malloc(sizeof(uint64_t) * tmp_index_combco[result->infile_num]);
+        for (uint64_t i = 0; i < tmp_index_combco[result->infile_num]; i++) {
+            result->comb_sketch[i] = tmp_combco[i];
+        }
+
+        if (sizeof(size_t) == sizeof(uint64_t)) {
+            result->sketch_index = (uint64_t *)tmp_index_combco;
+        } else {
+            result->sketch_index = malloc(sizeof(uint64_t) * (result->infile_num + 1));
+            for (int i = 0; i < result->infile_num + 1; i++) {
+                result->sketch_index[i] = tmp_index_combco[i];
+            }
+            free(tmp_index_combco);
+        }
+    } else if (file_exists_in_folder(qrydir, sketch_stat)) {
+        result->stat_type = 2;
+        result->mem_stat = read_from_file(test_get_fullpath(qrydir, sketch_stat), &file_size);
+        memcpy(&result->stats.lco_stat_val, result->mem_stat, sizeof(dim_sketch_stat_t));
+
+        result->hash_id = result->stats.lco_stat_val.hash_id;
+        result->infile_num = result->stats.lco_stat_val.infile_num;
+        result->kmerlen = result->stats.lco_stat_val.klen;
+        result->gname = (char (*)[PATHLEN])(result->mem_stat + sizeof(dim_sketch_stat_t));
+        result->comb_sketch = read_from_file(test_get_fullpath(qrydir, combined_sketch_suffix), &file_size);
+        result->sketch_index = read_from_file(test_get_fullpath(qrydir, idx_sketch_suffix), &file_size);
+    } else {
+        err(EXIT_FAILURE, "%s(): No valid sketch data found in folder: %s", __func__, qrydir);
+    }
+
+    return result; // Return the dynamically allocated memory
+}
+
+void free_unify_sketch (unify_sketch_t *result) {
+    if (result == NULL) return;  // Avoid dereferencing a NULL pointer   
+    free_all(result->comb_sketch,result->sketch_index,result->mem_stat,NULL);
+    result->mem_stat = result->sketch_index = result->comb_sketch = NULL;
+	free(result);
+}
 
 
 
