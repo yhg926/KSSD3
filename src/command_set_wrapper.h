@@ -19,6 +19,7 @@
 typedef struct set_opt
 {
   int operation;
+  bool q2markerdb;
   int p;
   int P;
   int num_remaining_args;

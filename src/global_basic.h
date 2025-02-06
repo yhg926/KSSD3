@@ -274,6 +274,8 @@ char* test_create_fullpath(const char *parent_path, const char *dstat_f);
 char* format_string(const char* format, ...);
 int file_exists_in_folder(const char *folder, const char *filename);
 void *read_from_file(const char *file_path, size_t *file_size) ;
+void *read_file_mode(const char *file_path, size_t *file_size, const char *mode);
+char **read_lines_from_file(const char *file_path, int *line_count) ;
 void write_to_file(const char *file_path, const void *data, size_t data_size) ;
 void concat_and_write_to_file(const char *file_path, const void *block1, size_t size1, const void *block2, size_t size2) ;
 
@@ -337,6 +339,7 @@ typedef struct {
     char (*gname)[PATHLEN];       // Query names
     uint64_t *comb_sketch;           // Combined k-mer counts
     uint64_t *sketch_index;     // Combined k-mer index
+	uint32_t *abundance;
     int infile_num;                 // Number of input files
     int kmerlen;                    // K-mer length
 	unsigned int hash_id;           // hash_id or shuf_id

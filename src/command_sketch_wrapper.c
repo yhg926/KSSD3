@@ -40,7 +40,7 @@ static struct argp_option opt_sketch[] =
 	{"list",'l',"file",0,"a file contain paths for all query sequences\v",6},
 	{"outdir",'o',"<path>",0,"folder path for results files.\v",7 },
 	{"abundance",'A',0,0,"abundance estimate mode.\v",8},
-  {"threads",'p',"<INT>", 0, "Threads number to use. [all threads]\v",9},
+  {"threads",'p',"<INT>", 0, "Threads number to use. [1]\v",9},
 	{"merge",777,0, 0, "merge sketches, not for genome sketching.\v",10},
   { 0 }
 };
@@ -58,8 +58,8 @@ sketch_opt_t sketch_opt = {
   .drfold = 12, //diagonal
 	.kmerocrs = 1,
 	.p = 1,  // threads num: p
-	.abundance = false, // no abundance
-	.merge_comblco = false,
+	.abundance = 0, // no abundance
+	.merge_comblco = 0,
 //  .fpath[0] ='\0',
   .outdir = "./",
 //	.pipecmd[0] = '\0', // no pipe command
@@ -129,12 +129,12 @@ static error_t parse_sketch(int key, char* arg, struct argp_state* state) {
 #else
       warnx("This version of kssd was built without OpenMP and "
           "thus does not support multi threading. Ignoring -p %d",atoi(arg));
-      break;
 #endif
-		}
+      break;
+	}
     case 'A':
     {
-      sketch_opt.abundance = true;
+      sketch_opt.abundance = 1;
       break;
     }
     case 'P':
@@ -151,13 +151,13 @@ static error_t parse_sketch(int key, char* arg, struct argp_state* state) {
     }
 		case 'o':
     {
-      sketch_opt.outdir = malloc(strlen(arg));
+      sketch_opt.outdir = malloc(strlen(arg)+10);
       strcpy(sketch_opt.outdir,arg);
       break;
     }
 		case 777:
 		{
-			sketch_opt.merge_comblco = true;
+			sketch_opt.merge_comblco = 1;
 			break;
 		}
     case ARGP_KEY_ARGS:
@@ -232,13 +232,11 @@ int cmd_sketch(struct argp_state* state)
 		int merge_count= merge_comblco(&sketch_opt);
 	}
 	else{
-
 		infile_tab_t* infile_stat = sketch_organize_infiles(&sketch_opt);
 		if(infile_stat->infile_num) compute_sketch(&sketch_opt, infile_stat);
 		else {
 			printf("not valid fas/fastq files!\n");
 		}
-
 		free(infile_stat->organized_infile_tab);	
 	}
   return 1;

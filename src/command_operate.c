@@ -28,54 +28,65 @@ int lsketch_union(set_opt_t* set_opt){ // for both union and uniq union
 
 	void *mem_stat = read_from_file( test_get_fullpath(set_opt->insketchpath,sketch_stat) , &file_size);
 	memcpy(&lco_stat_readin,mem_stat,sizeof(lco_stat_readin));
-
-  if(lco_stat_readin.infile_num == 1){ // no need create
-    char inpbuff;
-    printf("only 1 sketch, use %s as pan-sketch?(Y/N)\n",set_opt->insketchpath);
-    scanf(" %c", &inpbuff);
-
-    if ( (inpbuff == 'Y') || (inpbuff == 'y') ) {
-      chdir(set_opt->insketchpath);
-      if(rename(combined_sketch_suffix,lpan_prefix) !=0)  err(errno,"lsketch_union()");
-      printf("the union directory: %s created successfully\n", set_opt->insketchpath) ;
-      return 1;
-    }
-  }
-//no need to set lco_stat_readin.infile_num = 1 for pan sketch ?
- 	write_to_file(test_create_fullpath(set_opt->outdir,sketch_stat), &lco_stat_readin,sizeof(lco_stat_readin));
+  	if(lco_stat_readin.infile_num == 1){ // no need create 
+    	printf("only 1 sketch, use %s as pan-sketch?(Y/N)\n",set_opt->insketchpath);
+    	char inpbuff; scanf(" %c", &inpbuff);
+    	if ( (inpbuff == 'Y') || (inpbuff == 'y') ) {
+      		chdir(set_opt->insketchpath);
+      		if(rename(combined_sketch_suffix,lpan_prefix) !=0)  err(errno,"lsketch_union()");
+      		printf("the union directory: %s created successfully\n", set_opt->insketchpath) ;
+      	return 1;
+    	}
+  	}
+ 	write_to_file(test_create_fullpath(set_opt->outdir,sketch_stat), mem_stat,file_size);
 //union operation
 	uint64_t *mem_comblco = (uint64_t *)read_from_file( test_get_fullpath(set_opt->insketchpath,combined_sketch_suffix) , &file_size);
-	uint64_t *mem_pan = (uint64_t *)malloc(file_size);	
 	uint32_t in_kmer_ct = file_size/sizeof(mem_comblco[0]);
 	khash_t(kmer_hash) *h = kh_init(kmer_hash);
-
 	for(uint32_t i = 0; i< in_kmer_ct; i++){
 		khint_t key = kh_put(kmer_hash, h, mem_comblco[i], &ret);
 		if(ret) kh_value(h, key) = 1;
 		else kh_value(h, key)++;
 	}
-	uint32_t pan_kmer_ct = 0;
+	//uint32_t pan_kmer_ct = 0;
+	Vector mem_pan; vector_init(&mem_pan, sizeof(uint64_t));
 	if(set_opt->operation == 2){ // -u: normal union mode
 		for (khint_t k = kh_begin(h); k != kh_end(h); ++k) {
-  		if (kh_exist(h, k))  mem_pan[pan_kmer_ct++] = kh_key(h, k);   
-  	}
-		write_to_file(test_create_fullpath(set_opt->outdir,lpan_prefix),mem_pan,sizeof(mem_pan[0])*pan_kmer_ct);
+  			if (kh_exist(h, k))  vector_push(&mem_pan, &kh_key(h, k)); //mem_pan[pan_kmer_ct++] = kh_key(h, k);   
+  		}
+		write_to_file(test_create_fullpath(set_opt->outdir,lpan_prefix),mem_pan.data, mem_pan.element_size * mem_pan.size);
 	}
-	else if(set_opt->operation == 3){ // -q: uniq union mode
-	  for (khint_t k = kh_begin(h); k != kh_end(h); ++k) {
-      if (kh_exist(h, k) && kh_value(h, k) == 1) mem_pan[pan_kmer_ct++] = kh_key(h, k);
-    }	 
-    write_to_file(test_create_fullpath(set_opt->outdir,luniq_pan_prefix),mem_pan,sizeof(mem_pan[0])*pan_kmer_ct);
+	else if(set_opt->operation == 3){ // -q: uniq union mode	
+		if(!set_opt->q2markerdb){
+			for (khint_t k = kh_begin(h); k != kh_end(h); ++k) {
+                if (kh_exist(h, k) && kh_value(h, k) == 1)  vector_push(&mem_pan, &kh_key(h, k));
+            }
+            write_to_file(test_create_fullpath(set_opt->outdir,luniq_pan_prefix),mem_pan.data, mem_pan.element_size * mem_pan.size);
+		}
+		else{ // genereate markerdb directly instead of uniq union 
+			uint64_t *fco_pos = (uint64_t *)read_from_file( test_get_fullpath(set_opt->insketchpath,idx_sketch_suffix),&file_size);
+    		uint64_t *post_fco_pos = calloc((lco_stat_readin.infile_num + 1),sizeof(uint64_t));
+		    for (uint32_t i = 0; i <lco_stat_readin.infile_num;i++){
+        		for(uint64_t n = fco_pos[i]; n < fco_pos[i+1] ; n++){
+					khint_t k = kh_get(kmer_hash, h, mem_comblco[n]) ;
+            		if(kh_value(h, k) == 1) vector_push(&mem_pan,&mem_comblco[n]);           
+        		}
+        		post_fco_pos[i+1] = mem_pan.size;
+    		}
+    		write_to_file(format_string("%s/%s",set_opt->outdir,combined_sketch_suffix), mem_pan.data, mem_pan.element_size * mem_pan.size);
+		    write_to_file(format_string("%s/%s",set_opt->outdir,idx_sketch_suffix),post_fco_pos,(lco_stat_readin.infile_num+1) * sizeof(post_fco_pos[0]));
+			free_all(fco_pos,post_fco_pos,NULL);
+		}
 	}
 	else err(EINVAL,"operation value %d neither 2 (-u: union) nor 3 (-q :uniq uion )",set_opt->operation);
-	kh_destroy(kmer_hash, h);
-	free_all(mem_stat,mem_comblco,mem_pan,NULL);	
+	kh_destroy(kmer_hash, h);  vector_free(&mem_pan);
+	free_all(mem_stat,mem_comblco,NULL);	
   return 1;
 }
 
 KHASH_SET_INIT_INT64(kmer_set)
 int lsketch_operate(set_opt_t* set_opt){
-
+clock_t start_time = clock();
 	void *mem_stat_pan = read_from_file( test_get_fullpath(set_opt->pansketchpath,sketch_stat) , &file_size);
 	memcpy(&lco_stat_pan,mem_stat_pan,sizeof(lco_stat_pan));
 	void *mem_stat_lco = read_from_file( test_get_fullpath(set_opt->insketchpath,sketch_stat), &file_size);
@@ -88,7 +99,6 @@ int lsketch_operate(set_opt_t* set_opt){
 	char *lco_fpath; 
 	if( (lco_fpath = test_get_fullpath(set_opt->pansketchpath,lpan_prefix)) == NULL && (lco_fpath = test_get_fullpath(set_opt->pansketchpath,luniq_pan_prefix)) == NULL  )
 		err(EXIT_FAILURE,"%s():cannot find %s or %s under %s ",__func__,lpan_prefix,luniq_pan_prefix, set_opt->pansketchpath);
-
 	uint64_t *mem_pan = (uint64_t *)read_from_file(lco_fpath,&file_size);			
   khash_t(kmer_set) *h = kh_init(kmer_set); 
   uint32_t kmer_ct = file_size/sizeof(uint64_t);
@@ -100,12 +110,13 @@ int lsketch_operate(set_opt_t* set_opt){
 	//read comblco to mem
 	uint64_t *tmp_comblco_mem = (uint64_t *)read_from_file( test_get_fullpath(set_opt->insketchpath,combined_sketch_suffix),&file_size);
 	uint64_t *post_comblco_mem = (uint64_t *) malloc(file_size); uint32_t post_kmer_ct = 0;
+   
 	// sketch operation
 	for (uint32_t i = 0; i <lco_stat_origin.infile_num;i++){
-		for(uint32_t n = 0; n < fco_pos[i+1] - fco_pos[i]; n++){
+		for(uint64_t n = fco_pos[i]; n < fco_pos[i+1] ; n++){
 			 //make sure set_opt->operation == 0 if subtract, == 1 if intersect
-			if(set_opt->operation == (kh_get(kmer_set, h, tmp_comblco_mem[fco_pos[i]+n]) != kh_end(h)) )
-				post_comblco_mem[post_kmer_ct++] = tmp_comblco_mem[fco_pos[i]+n];				
+			if(set_opt->operation == (kh_get(kmer_set, h, tmp_comblco_mem[n]) != kh_end(h)) )
+				post_comblco_mem[post_kmer_ct++] = tmp_comblco_mem[n];				
 		}
 		post_fco_pos[i+1] = post_kmer_ct;
 	}
@@ -118,7 +129,6 @@ int lsketch_operate(set_opt_t* set_opt){
 	write_to_file(outfpath,post_fco_pos,(lco_stat_origin.infile_num+1) * sizeof(post_fco_pos[0]));
 
 	free_all(mem_stat_pan, mem_stat_lco,lco_fpath,mem_pan,fco_pos, post_fco_pos, tmp_comblco_mem,post_comblco_mem,NULL);
-
 	return 1;
 }
 

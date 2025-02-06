@@ -499,7 +499,7 @@ void replaceChar(char *str, char oldChar, char newChar) {
 #endif
 
 int mkdir_p(const char *path) {
-    char temp[1024];
+	char temp[1024];
     size_t len = strlen(path);
     struct stat st;
 
@@ -531,7 +531,6 @@ int mkdir_p(const char *path) {
             return -1;
         }
     }
-
     return 0; // Success
 }
 
@@ -551,13 +550,13 @@ char* test_get_fullpath(const char *parent_path, const char *dstat_f)
       return fullpath;
     }
     else{
-//			printf("%s(): %s do not exists\n",__func__,fullpath);
+	  printf("%s(): %s do not exists\n",__func__,fullpath);
       free((char*)fullpath);
       return NULL;
     }
   }
   else{
-//		printf("%s()::%s is not a director\n",__func__,parent_path);
+		printf("%s()::%s is not a director\n",__func__,parent_path);
     return NULL;
 	}
 };
@@ -590,31 +589,20 @@ int file_exists_in_folder(const char *folder, const char *filename) {
 void *read_from_file(const char *file_path, size_t *file_size) {
     // Open the file in binary read mode
     FILE *file = fopen(file_path, "rb");
-    if (!file) {
-        err(EXIT_FAILURE, "%s(): Error opening file '%s'", __func__, file_path);
-    }
-
-    // Seek to the end of the file to determine its size
-    if (fseek(file, 0, SEEK_END) != 0) {
-        err(EXIT_FAILURE, "%s(): Failed to seek to the end of file '%s'", __func__, file_path);
-    }
-
+    if (!file) err(EXIT_FAILURE, "%s(): Error opening file '%s'", __func__, file_path);
+     // Seek to the end of the file to determine its size
+    if (fseek(file, 0, SEEK_END) != 0)  err(EXIT_FAILURE, "%s(): Failed to seek to the end of file '%s'", __func__, file_path); 
     // Get the file size
     long size = ftell(file);
-    if (size == -1) {
-        err(EXIT_FAILURE, "%s(): Failed to determine file size for '%s'", __func__, file_path);
-    }
-
-    // Seek back to the beginning of the file
+    if (size == -1)  err(EXIT_FAILURE, "%s(): Failed to determine file size for '%s'", __func__, file_path); 
+   // Seek back to the beginning of the file
     rewind(file);
-
     // Allocate memory to hold the file contents
     void *buffer = malloc(size);
     if (!buffer) {
         fclose(file);
         err(EXIT_FAILURE, "%s(): Memory allocation failed for file '%s'", __func__, file_path);
     }
-
     // Read the entire file into memory
     size_t read_count = fread(buffer, 1, size, file);
     if (read_count != (size_t)size) {
@@ -622,16 +610,80 @@ void *read_from_file(const char *file_path, size_t *file_size) {
         fclose(file);
         err(EXIT_FAILURE, "%s(): Failed to read the file '%s' into memory", __func__, file_path);
     }
-
-    // Close the file
     fclose(file);
-
     // Set the file size if a valid pointer is provided
-    if (file_size) {
-        *file_size = (size_t)size;
+    if (file_size)  *file_size = (size_t)size;
+    return buffer;
+}
+// Function to read a file into memory (supports both text and binary modes)
+void *read_file_mode(const char *file_path, size_t *file_size, const char *mode) {
+    // Validate mode input
+    if (!mode || (strcmp(mode, "r") != 0 && strcmp(mode, "rb") != 0)) 
+        err(EXIT_FAILURE, "%s(): Invalid mode '%s'. Use \"r\" for text or \"rb\" for binary.", __func__, mode ? mode : "(null)");
+    // Open the file with the specified mode
+    FILE *file = fopen(file_path, mode);
+    if (!file)  err(EXIT_FAILURE, "%s(): Error opening file '%s': %s", __func__, file_path, strerror(errno));
+     // Seek to the end of the file to determine its size
+    if (fseek(file, 0, SEEK_END) != 0) {
+		fclose(file);
+        err(EXIT_FAILURE, "%s(): Failed to seek to the end of file '%s'", __func__, file_path);
+    }
+    // Get the file size
+    long size = ftell(file);
+    if (size == -1) {
+		fclose(file);
+        err(EXIT_FAILURE, "%s(): Failed to determine file size for '%s'", __func__, file_path);
+    }
+    // Seek back to the beginning of the file
+    rewind(file);
+    // Check if text mode ("r") needs an extra null-terminator
+    int is_text = (strcmp(mode, "r") == 0);
+    void *buffer = malloc(size + (is_text ? 1 : 0));
+    if (!buffer) {
+		fclose(file);
+        err(EXIT_FAILURE, "%s(): Memory allocation failed for file '%s'\n", __func__, file_path);
+    }
+    // Read the entire file into memory
+    size_t read_count = fread(buffer, 1, size, file);
+    if (read_count != (size_t)size) {
+        free(buffer);
+        fclose(file);
+        err(EXIT_FAILURE, "%s(): Failed to read the file '%s' into memory\n", __func__, file_path); 
     }
 
+    fclose(file);
+    // Null-terminate if reading as a text file
+    if (is_text) ((char *)buffer)[size] = '\0';
+    // Set the file size if a valid pointer is provided
+    if (file_size) *file_size = (size_t)size;
+
     return buffer;
+}
+// Function to read a file and split it into an array of lines
+char **read_lines_from_file(const char *file_path, int *line_count) {
+    size_t file_size;
+    char *content = (char *)read_file_mode(file_path, &file_size, "r");  // Read file as text
+    if (!content) return NULL;
+    // Count the number of lines
+    *line_count = 0;
+    for (size_t i = 0; i < file_size; i++) {
+        if (content[i] == '\n') (*line_count)++;
+    }
+    (*line_count)++;  // Last line (if file doesn't end with '\n')
+    // Allocate an array to hold pointers to each line
+    char **lines = malloc((*line_count) * sizeof(char *));
+    if (!lines) {
+        free(content);
+        err(EXIT_FAILURE, "%s():Memory allocation failed for lines array",__func__);
+    }
+    // Tokenize the file content into lines
+    size_t index = 0;
+    char *line = strtok(content, "\n");
+    while (line) {
+        lines[index++] = line;
+        line = strtok(NULL, "\n");
+    }
+    return lines;  // Note: The returned array points to `content` memory
 }
 
 // fwrite wrapper to write memory to a file
@@ -763,48 +815,6 @@ char* format_string(const char* format, ...) {
     return result;
 }
 
-/*
-unify_sketch_t*  generic_sketch_parse(const char *qrydir) {
-    unify_sketch_t result = {0}; size_t file_size;
-
-    if (file_exists_in_folder(qrydir, co_dstat)) {
-        result.stat_type = 1;
-        result.mem_stat = read_from_file(test_get_fullpath(qrydir, co_dstat), &file_size);
-        memcpy(&result.stats.co_stat_val, result.mem_stat, sizeof(co_dstat_t));
-        if (result.stats.co_stat_val.comp_num > 1) err(EXIT_FAILURE, "%s(): comp_num must be 1. Found: %d",__func__,result.stats.co_stat_val.comp_num);
-
-		result.hash_id = result.stats.co_stat_val.shuf_id;
-        result.infile_num = result.stats.co_stat_val.infile_num;
-        result.kmerlen = result.stats.co_stat_val.kmerlen;
-        result.gname = (char (*)[PATHLEN])(result.mem_stat + sizeof(co_dstat_t) + sizeof(ctx_obj_ct_t) * result.infile_num);
-
-        unsigned int *tmp_combco = read_from_file(format_string("%s/%s.0", qrydir, skch_prefix), &file_size);
-        size_t *tmp_index_combco = read_from_file(format_string("%s/%s.0", qrydir, idx_prefix), &file_size);
-        result.comb_sketch = malloc(sizeof(uint64_t) * tmp_index_combco[result.infile_num]);
-        for (uint64_t i = 0; i < tmp_index_combco[result.infile_num]; i++)  result.comb_sketch[i] = tmp_combco[i];        
-
-        if (sizeof(size_t) == sizeof(uint64_t)) result.sketch_index = (uint64_t *)tmp_index_combco;
-        else {
-            result.sketch_index = malloc(sizeof(uint64_t) * (result.infile_num + 1));
-            for (int i = 0; i < result.infile_num + 1; i++) result.sketch_index[i] = tmp_index_combco[i];           
-            free(tmp_index_combco);
-        }
-    } else if (file_exists_in_folder(qrydir, sketch_stat)) {
-        result.stat_type = 2;
-        result.mem_stat = read_from_file(test_get_fullpath(qrydir, sketch_stat), &file_size);
-        memcpy(&result.stats.lco_stat_val, result.mem_stat, sizeof(dim_sketch_stat_t));
-
-		result.hash_id = result.stats.lco_stat_val.hash_id;
-        result.infile_num = result.stats.lco_stat_val.infile_num;
-        result.kmerlen = result.stats.lco_stat_val.klen;
-        result.gname = (char (*)[PATHLEN])(result.mem_stat + sizeof(dim_sketch_stat_t));
-        result.comb_sketch = read_from_file(test_get_fullpath(qrydir, combined_sketch_suffix), &file_size);
-        result.sketch_index = read_from_file(test_get_fullpath(qrydir, idx_sketch_suffix), &file_size);
-    } else err(EXIT_FAILURE, "%s(): No valid sketch data found in folder: %s",__func__, qrydir); 
-
-    return &result;
-}
-*/
 unify_sketch_t* generic_sketch_parse(const char *qrydir) {
     unify_sketch_t *result = malloc(sizeof(unify_sketch_t)); // Dynamically allocate memory
     if (result == NULL) {
@@ -828,9 +838,15 @@ unify_sketch_t* generic_sketch_parse(const char *qrydir) {
         unsigned int *tmp_combco = read_from_file(format_string("%s/%s.0", qrydir, skch_prefix), &file_size);
         size_t *tmp_index_combco = read_from_file(format_string("%s/%s.0", qrydir, idx_prefix), &file_size);
         result->comb_sketch = malloc(sizeof(uint64_t) * tmp_index_combco[result->infile_num]);
-        for (uint64_t i = 0; i < tmp_index_combco[result->infile_num]; i++) {
-            result->comb_sketch[i] = tmp_combco[i];
-        }
+        for (uint64_t i = 0; i < tmp_index_combco[result->infile_num]; i++) result->comb_sketch[i] = tmp_combco[i];
+		free(tmp_combco);
+        
+		if(result->stats.co_stat_val.koc) {
+			unsigned short *tmp_ab = read_from_file(format_string("%s/%s.0.a", qrydir, skch_prefix), &file_size);
+			result->abundance =  malloc(sizeof(uint32_t) * tmp_index_combco[result->infile_num]);
+			for (uint64_t i = 0; i < tmp_index_combco[result->infile_num]; i++) result->abundance[i] = tmp_ab[i]; 
+			free(tmp_ab);
+		}
 
         if (sizeof(size_t) == sizeof(uint64_t)) {
             result->sketch_index = (uint64_t *)tmp_index_combco;
@@ -852,6 +868,8 @@ unify_sketch_t* generic_sketch_parse(const char *qrydir) {
         result->gname = (char (*)[PATHLEN])(result->mem_stat + sizeof(dim_sketch_stat_t));
         result->comb_sketch = read_from_file(test_get_fullpath(qrydir, combined_sketch_suffix), &file_size);
         result->sketch_index = read_from_file(test_get_fullpath(qrydir, idx_sketch_suffix), &file_size);
+		if(result->stats.lco_stat_val.koc) result->abundance = read_from_file(test_get_fullpath(qrydir, combined_ab_suffix), &file_size);
+
     } else {
         err(EXIT_FAILURE, "%s(): No valid sketch data found in folder: %s", __func__, qrydir);
     }
@@ -863,6 +881,7 @@ void free_unify_sketch (unify_sketch_t *result) {
     if (result == NULL) return;  // Avoid dereferencing a NULL pointer   
     free_all(result->comb_sketch,result->sketch_index,result->mem_stat,NULL);
     result->mem_stat = result->sketch_index = result->comb_sketch = NULL;
+	if(result->abundance != NULL) free(result->abundance);
 	free(result);
 }
 

@@ -15,11 +15,12 @@ static struct argp_option opt_set[] =
 	{"subtract",'s',"<pan>", 0,"subtract the pan-sketch from all input sketches.\v",2 },
 	{"intsect",'i',"<pan>", 0, "intersect with the pan-sketch for all input sketches.\v",2},
 	{"uniq_union",'q',0,  0, "get uniq union set of the sketches.\v",3 },
+    {"markerdb",333,0,  0, "generate markerdb instead of uniq union set, -q must be set.\v",4 },
 //	{"combin_pan",'c',0,  0, "combine pan files to combco file.\v",4 },
-	{"threads",'p',"<INT>",  0, "number of threads.\v",4 },
-	{"print",'P',0,  0, "print genome names.\v",4 },
-	{"grouping",'g',"<file.tsv>",0,"grouping genomes by input category file.\v",4},
-	{"outdir",'o',"<path>",0,"specify the output directory.\v",5},
+	{"threads",'p',"<INT>",  0, "number of threads.\v",5 },
+	{"print",'P',0,  0, "print genome names.\v",5 },
+	{"grouping",'g',"<file.tsv>",0,"grouping genomes by input category file.\v",5},
+	{"outdir",'o',"<path>",0,"specify the output directory.\v",6},
   { 0 }
 };
 
@@ -33,6 +34,7 @@ static char doc_set[] =
 
 set_opt_t set_opt = {
 .operation = -1,//0:subtract,1:intersect,2 union, 3 uniq_union, 4 combin_pan
+.q2markerdb = 0, // when -q set, generate markerdb instead of uniq union set, only for lco sketch 
 .p = 1,
 .P = 0,
 .num_remaining_args = 0,
@@ -110,6 +112,11 @@ static error_t parse_set(int key, char* arg, struct argp_state* state) {
 		case 'g':
 		{
 			strcpy(set_opt.subsetf, arg);
+			break;
+		}
+		case 333:
+		{
+			set_opt.q2markerdb = 1; 
 			break;
 		}
 		case ARGP_KEY_ARGS:

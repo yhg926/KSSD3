@@ -20,44 +20,43 @@ static struct stat tmpstat;
 void compute_sketch(sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat){
 	//initilization
 	TL = 2*(sketch_opt_val->hclen + sketch_opt_val->holen) + sketch_opt_val->iolen;
-  llong tmp_var = (1LLU << (2*sketch_opt_val->hclen)) - 1 ;
-  ctxmask = (tmp_var << (2*(sketch_opt_val->iolen + sketch_opt_val->hclen + sketch_opt_val->holen)) ) + (tmp_var << (2*(sketch_opt_val->holen) ));
-  tupmask = UINT64_MAX >> (64 - 2*TL) ;
+	llong tmp_var = (1LLU << (2*sketch_opt_val->hclen)) - 1 ;
+	ctxmask = (tmp_var << (2*(sketch_opt_val->iolen + sketch_opt_val->hclen + sketch_opt_val->holen)) ) + (tmp_var << (2*(sketch_opt_val->holen) ));
+ 	tupmask = UINT64_MAX >> (64 - 2*TL) ;
 	FILTER = UINT32_MAX >> sketch_opt_val->drfold  ; //2^(32-12)
 	if ( TL > 32 || FILTER < 256) err(EINVAL,"compute_sketch(): TL (%d) or FILTER (%u) is out of range (TL <=32 and FILTER: 256..0xffffffff)",TL, FILTER);
 	unsigned int hash_id =  GET_SKETCHING_ID(sketch_opt_val->hclen, sketch_opt_val->holen, sketch_opt_val->iolen, sketch_opt_val->drfold , FILTER); 
 	printf("Sketching method hashid = %u\tTL=%u\n", hash_id,TL);
 	uint64_t * tmp_ct_list = calloc (infile_stat->infile_num + 1, sizeof(uint64_t));	
-	
 	mkdir_p(sketch_opt_val->outdir);
 #pragma omp parallel for num_threads(sketch_opt_val->p) schedule(guided)	
 	for(int i = 0; i< infile_stat->infile_num; i++ ){
-		sprintf(tmp_fname,"%s/%d.%s",sketch_opt_val->outdir,i,sketch_suffix);
 		// sketching all genomes individually
-	 	tmp_ct_list[i+1] = reads2sketch64( (infile_stat->organized_infile_tab)[i].fpath, tmp_fname, sketch_opt_val->abundance);
-		printf("\rsketching %s completed!\tsketch size=%lu",(infile_stat->organized_infile_tab)[i].fpath,tmp_ct_list[i+1]);
+	 tmp_ct_list[i+1] = reads2sketch64( (infile_stat->organized_infile_tab)[i].fpath, format_string("%s/%d.%s",sketch_opt_val->outdir,i,sketch_suffix), sketch_opt_val->abundance);
+		printf("\r%dth/%d genome sketching %s completed!\tsketch size=%lu",i+1,infile_stat->infile_num,(infile_stat->organized_infile_tab)[i].fpath,tmp_ct_list[i+1]);
 	}
+	printf("\n");
 //combine *.lco to comblco
-	sprintf(tmp_fname,"%s/%s",sketch_opt_val->outdir,combined_sketch_suffix);
 	FILE *comb_sketch_fp,*comb_ab_fp;
-	if( ( comb_sketch_fp = fopen(tmp_fname,"wb")) == NULL )  err(errno,"%s() open file error: %s",__func__,tmp_fname);	
+	if( ( comb_sketch_fp = fopen(format_string("%s/%s",sketch_opt_val->outdir,combined_sketch_suffix),"wb")) == NULL )  
+		err(errno,"%s() open file error: %s/%s",__func__,sketch_opt_val->outdir,combined_sketch_suffix);	
  	if(sketch_opt_val->abundance){
-		sprintf(tmp_fname,"%s/%s.a",sketch_opt_val->outdir,combined_sketch_suffix);
-		if( ( comb_ab_fp = fopen(tmp_fname,"wb")) == NULL )  err(errno,"compute_sketch() open file error: %s",tmp_fname);
+		if( ( comb_ab_fp = fopen(format_string("%s/%s.a",sketch_opt_val->outdir,combined_sketch_suffix),"wb")) == NULL ) 
+			err(errno,"%s() open file error: %s/%s.a",__func__,sketch_opt_val->outdir,combined_sketch_suffix);
 	}
-	char *tmp_infname = malloc(PATHLEN+10);	
+	
 	for(int i = 0; i< infile_stat->infile_num; i++ ){	
-		sprintf(tmp_infname,"%s/%d.%s",sketch_opt_val->outdir,i,sketch_suffix);
-		uint64_t *mem_lco = read_from_file(tmp_infname, &file_size); 		
+		sprintf(tmp_fname,"%s/%d.%s",sketch_opt_val->outdir,i,sketch_suffix);
+		uint64_t *mem_lco = read_from_file(tmp_fname, &file_size); 		
 		fwrite(mem_lco,file_size,1,comb_sketch_fp);
 		tmp_ct_list[i+1] += tmp_ct_list[i];	
-		remove(tmp_infname);free(mem_lco);	
+		remove(tmp_fname);free(mem_lco);	
 		//abundance 
 		if(!sketch_opt_val->abundance) continue;
-		sprintf(tmp_infname,"%s/%d.%s.a",sketch_opt_val->outdir,i,sketch_suffix);	
-		uint32_t *mem_ab = read_from_file(tmp_infname, &file_size);
+		sprintf(tmp_fname,"%s/%d.%s.a",sketch_opt_val->outdir,i,sketch_suffix);
+		uint32_t *mem_ab = read_from_file(tmp_fname, &file_size);
 		fwrite(mem_ab,file_size,1,comb_ab_fp);
-		remove(tmp_infname);free(mem_ab);		
+		remove(tmp_fname);free(mem_ab);		
 	}
 	fclose(comb_sketch_fp);	if( sketch_opt_val->abundance) fclose(comb_ab_fp);	
  //write comblco.index 
@@ -73,12 +72,10 @@ void compute_sketch(sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat){
     .infile_num = infile_stat->infile_num
   };
   char (*tmpname)[PATHLEN] = malloc(infile_stat->infile_num * PATHLEN);
-  for(int i = 0; i< infile_stat->infile_num; i++ ) {
-		 memcpy(tmpname[i],(infile_stat->organized_infile_tab)[i].fpath,PATHLEN);
-	}
+  for(int i = 0; i< infile_stat->infile_num; i++ ) memcpy(tmpname[i],(infile_stat->organized_infile_tab)[i].fpath,PATHLEN);	
   concat_and_write_to_file(test_create_fullpath(sketch_opt_val->outdir,sketch_stat),&dim_sketch_stat,sizeof(dim_sketch_stat),tmpname,infile_stat->infile_num * PATHLEN );
 
-	free_all( tmp_infname,tmpname,tmp_ct_list,NULL);
+	free_all( tmpname,tmp_ct_list,NULL);
 };
 
 
@@ -91,26 +88,23 @@ int reads2sketch64 (char* seqfname, char * outfname, bool abundance ) {
  	kseq_t *seq = kseq_init(infile);
 	khash_t(kmer_hash) *h = kh_init(kmer_hash);
 	uint64_t tuple,crvstuple,unituple,basenum,unictx;	
-	uint32_t len_mv = 2*TL - 2;	
-  uint32_t sketch_size = 0;
-FILE * outfp = fopen("./outtf","wb");
+	uint32_t len_mv = 2*TL - 2;	 uint32_t sketch_size = 0;
  
-
 	while (kseq_read(seq) >= 0) {
 		const char *s = seq->seq.s;	 	
 		if(seq->seq.l < TL) continue;	
 
 		for(int pos = 0; pos < TL; pos++){
-      basenum = (uint64_t)Basemap[(unsigned short)s[pos]];
+     		 basenum = (uint64_t)Basemap[(unsigned short)s[pos]];
 			tuple = ( ( tuple<< 2 ) | basenum )  ;
-      crvstuple = (( crvstuple >> 2 ) | ((basenum^3LLU) << len_mv )) ;
+      		crvstuple = (( crvstuple >> 2 ) | ((basenum^3LLU) << len_mv )) ;
 		}		
 		for(int pos = TL; pos < seq->seq.l ; pos++){
 			basenum =	(llong)Basemap[(unsigned short)s[pos]];
-      tuple = ( ( tuple<< 2 ) | basenum )  ;
-      crvstuple = (( crvstuple >> 2 ) | ((basenum^3LLU) << len_mv )) ;
+      		tuple = ( ( tuple<< 2 ) | basenum )  ;
+      		crvstuple = (( crvstuple >> 2 ) | ((basenum^3LLU) << len_mv )) ;
 			unituple = (tuple & ctxmask) < (crvstuple & ctxmask) ? tuple : crvstuple;
-      unictx = unituple & ctxmask;
+      		unictx = unituple & ctxmask;
 
 			if (SKETCH_HASH( unictx ) > FILTER) continue;						
 			int ret; khint_t key = kh_put(kmer_hash, h, unituple & tupmask, &ret);
@@ -125,8 +119,7 @@ FILE * outfp = fopen("./outtf","wb");
 
 	//write sketch and abundance
 	uint64_t *mem_lco = malloc(sketch_size * sizeof(uint64_t));
-	uint32_t *mem_ab; 
-	if (abundance) mem_ab = malloc(sketch_size * sizeof(uint32_t));
+	uint32_t *mem_ab; 	if (abundance) mem_ab = malloc(sketch_size * sizeof(uint32_t));
 	uint32_t kmer_ct = 0;
 	for (khint_t k = kh_begin(h); k != kh_end(h); ++k) {
   	if (kh_exist(h, k)) {
@@ -139,12 +132,10 @@ FILE * outfp = fopen("./outtf","wb");
 	write_to_file(outfname,mem_lco,sketch_size * sizeof(uint64_t));
 	kh_destroy(kmer_hash, h); free(mem_lco); 
 	if(abundance){
-		sprintf(tmp_fname,"%s.a",outfname);
-		write_to_file(tmp_fname,mem_ab,sketch_size * sizeof(uint32_t));
+		write_to_file(format_string("%s.a",outfname),mem_ab,sketch_size * sizeof(uint32_t));
 		free(mem_ab);
 	} 	
 	return kmer_ct;// sketch_size;
-
 }
 
 
