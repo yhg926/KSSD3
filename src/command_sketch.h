@@ -2,8 +2,8 @@
 #define SKETCH_H
 #include "global_basic.h"
 #include "command_sketch_wrapper.h"
-#include "klib/khash.h"
-#include "klib/kseq.h"
+#include "../klib/khash.h"
+#include "../klib/kseq.h"
 #include "MurmurHash3.h"
 //#include "xxhash.h"
 #include <zlib.h>

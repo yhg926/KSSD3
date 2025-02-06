@@ -1,7 +1,7 @@
 /*command_operate.c extent the legency kssd set functions to support long sketch (*.comblco) */
 #include "global_basic.h"
 #include "command_operate.h"
-#include "klib/khash.h"
+#include "../klib/khash.h"
 #include <stdint.h>
 
 const char lpan_prefix[]="lpan"; //uint64_t pan

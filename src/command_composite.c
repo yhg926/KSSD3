@@ -1,6 +1,6 @@
 #include "command_composite.h"
 #include "global_basic.h"
-#include "klib/khash.h"
+#include "../klib/khash.h"
 #include <assert.h>
 #include <stdarg.h>
 #include <stdio.h>

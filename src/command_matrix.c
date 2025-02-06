@@ -14,7 +14,7 @@
 #include <omp.h>
 #include <stdatomic.h>
 #include <ctype.h>
-#include "klib/khash.h"
+#include "../klib/khash.h"
 
 KHASH_SET_INIT_INT64(kmer_set)
 // core functions
