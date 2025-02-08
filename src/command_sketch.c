@@ -10,7 +10,7 @@ const char combined_ab_suffix[] = "comblco.a";
 //shared vars in this scope
 static char TL;
 static unsigned int FILTER;
-static llong ctxmask,tupmask;
+static uint64_t ctxmask,tupmask;
 //tmp container in this scope
 static size_t file_size;
 static dim_sketch_stat_t comblco_stat_one, comblco_stat_it;
@@ -20,8 +20,8 @@ static struct stat tmpstat;
 void compute_sketch(sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat){
 	//initilization
 	TL = 2*(sketch_opt_val->hclen + sketch_opt_val->holen) + sketch_opt_val->iolen;
-	llong tmp_var = (1LLU << (2*sketch_opt_val->hclen)) - 1 ;
-	ctxmask = (tmp_var << (2*(sketch_opt_val->iolen + sketch_opt_val->hclen + sketch_opt_val->holen)) ) + (tmp_var << (2*(sketch_opt_val->holen) ));
+	uint64_t tmp_var =  UINT64_MAX >> (64 - 2*sketch_opt_val->hclen) ;// (1LLU << (2*sketch_opt_val->hclen)) - 1 ;
+	ctxmask = (tmp_var << (2*(sketch_opt_val->iolen + sketch_opt_val->hclen + sketch_opt_val->holen)) ) | (tmp_var << (2*(sketch_opt_val->holen) ));
  	tupmask = UINT64_MAX >> (64 - 2*TL) ;
 	FILTER = UINT32_MAX >> sketch_opt_val->drfold  ; //2^(32-12)
 	if ( TL > 32 || FILTER < 256) err(EINVAL,"compute_sketch(): TL (%d) or FILTER (%u) is out of range (TL <=32 and FILTER: 256..0xffffffff)",TL, FILTER);

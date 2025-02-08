@@ -816,7 +816,7 @@ char* format_string(const char* format, ...) {
 }
 
 unify_sketch_t* generic_sketch_parse(const char *qrydir) {
-    unify_sketch_t *result = malloc(sizeof(unify_sketch_t)); // Dynamically allocate memory
+    unify_sketch_t *result = calloc(1,sizeof(unify_sketch_t)); // Dynamically allocate memory
     if (result == NULL) {
         err(EXIT_FAILURE, "%s(): Memory allocation failed", __func__);
     }
@@ -881,7 +881,7 @@ void free_unify_sketch (unify_sketch_t *result) {
     if (result == NULL) return;  // Avoid dereferencing a NULL pointer   
     free_all(result->comb_sketch,result->sketch_index,result->mem_stat,NULL);
     result->mem_stat = result->sketch_index = result->comb_sketch = NULL;
-	if(result->abundance != NULL) free(result->abundance);
+	if(result->abundance) free(result->abundance);
 	free(result);
 }
 
