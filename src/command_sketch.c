@@ -93,19 +93,23 @@ int reads2sketch64 (char* seqfname, char * outfname, bool abundance ) {
 	while (kseq_read(seq) >= 0) {
 		const char *s = seq->seq.s;	 	
 		if(seq->seq.l < TL) continue;	
-
+		int base = 0;
+/*
 		for(int pos = 0; pos < TL; pos++){
      		 basenum = (uint64_t)Basemap[(unsigned short)s[pos]];
 			tuple = ( ( tuple<< 2 ) | basenum )  ;
       		crvstuple = (( crvstuple >> 2 ) | ((basenum^3LLU) << len_mv )) ;
 		}		
-		for(int pos = TL; pos < seq->seq.l ; pos++){
-			basenum =	(llong)Basemap[(unsigned short)s[pos]];
+*/
+		for(int pos = 0; pos < seq->seq.l ; pos++){ //for(int pos = TL; pos < seq->seq.l ; pos++)
+			if (Basemap[(unsigned short)s[pos]] == DEFAULT){ base = 0;continue;}
+			basenum = Basemap[(unsigned short)s[pos]];
       		tuple = ( ( tuple<< 2 ) | basenum )  ;
       		crvstuple = (( crvstuple >> 2 ) | ((basenum^3LLU) << len_mv )) ;
+			if(++base < TL) continue;
+			// if base >=TL, namely, contiue ACGT TL-mer
 			unituple = (tuple & ctxmask) < (crvstuple & ctxmask) ? tuple : crvstuple;
       		unictx = unituple & ctxmask;
-
 			if (SKETCH_HASH( unictx ) > FILTER) continue;						
 			int ret; khint_t key = kh_put(kmer_hash, h, unituple & tupmask, &ret);
 
