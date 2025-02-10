@@ -115,10 +115,9 @@ static error_t parse_sketch(int key, char* arg, struct argp_state* state) {
 		case 'n':
     {
       int val = atoi(arg);
-       if( val < 1 || val > 65536 ) {
-        printf("-n requires a integer within ranges 1..65536 \n");
-        exit(1);
-      }
+       if( val < 1 || val > 65536 ) 
+        err(errno, "%s():-n requires a integer within ranges 1..65536",__func__);
+              
       sketch_opt.kmerocrs = val;
       break;
     }

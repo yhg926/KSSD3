@@ -32,7 +32,7 @@ void compute_sketch(sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat){
 #pragma omp parallel for num_threads(sketch_opt_val->p) schedule(guided)	
 	for(int i = 0; i< infile_stat->infile_num; i++ ){
 		// sketching all genomes individually
-	 tmp_ct_list[i+1] = reads2sketch64( (infile_stat->organized_infile_tab)[i].fpath, format_string("%s/%d.%s",sketch_opt_val->outdir,i,sketch_suffix), sketch_opt_val->abundance);
+	 tmp_ct_list[i+1] = reads2sketch64( (infile_stat->organized_infile_tab)[i].fpath, format_string("%s/%d.%s",sketch_opt_val->outdir,i,sketch_suffix), sketch_opt_val->abundance, sketch_opt_val->kmerocrs);
 		printf("\r%dth/%d genome sketching %s completed!\tsketch size=%lu",i+1,infile_stat->infile_num,(infile_stat->organized_infile_tab)[i].fpath,tmp_ct_list[i+1]);
 	}
 	printf("\n");
@@ -82,7 +82,7 @@ void compute_sketch(sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat){
 KSEQ_INIT(gzFile, gzread) 
 KHASH_MAP_INIT_INT64(kmer_hash, int)
 
-int reads2sketch64 (char* seqfname, char * outfname, bool abundance ) {
+int reads2sketch64 (char* seqfname, char * outfname, bool abundance, int n ) {
 	
 	gzFile infile = gzopen(seqfname, "r");	if( !infile ) err(errno,"reads2sketch64(): Cannot open file %s", seqfname);	
  	kseq_t *seq = kseq_init(infile);
@@ -94,13 +94,7 @@ int reads2sketch64 (char* seqfname, char * outfname, bool abundance ) {
 		const char *s = seq->seq.s;	 	
 		if(seq->seq.l < TL) continue;	
 		int base = 0;
-/*
-		for(int pos = 0; pos < TL; pos++){
-     		 basenum = (uint64_t)Basemap[(unsigned short)s[pos]];
-			tuple = ( ( tuple<< 2 ) | basenum )  ;
-      		crvstuple = (( crvstuple >> 2 ) | ((basenum^3LLU) << len_mv )) ;
-		}		
-*/
+
 		for(int pos = 0; pos < seq->seq.l ; pos++){ //for(int pos = TL; pos < seq->seq.l ; pos++)
 			if (Basemap[(unsigned short)s[pos]] == DEFAULT){ base = 0;continue;}
 			basenum = Basemap[(unsigned short)s[pos]];
@@ -126,7 +120,7 @@ int reads2sketch64 (char* seqfname, char * outfname, bool abundance ) {
 	uint32_t *mem_ab; 	if (abundance) mem_ab = malloc(sketch_size * sizeof(uint32_t));
 	uint32_t kmer_ct = 0;
 	for (khint_t k = kh_begin(h); k != kh_end(h); ++k) {
-  	if (kh_exist(h, k)) {
+  	if (kh_exist(h, k) && kh_value(h, k) >= n ) {
 			mem_lco[kmer_ct] = kh_key(h, k);
 			if(abundance) mem_ab[kmer_ct]	= kh_value(h, k);
 			kmer_ct++;	
