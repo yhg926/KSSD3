@@ -91,7 +91,7 @@ clock_t start_time = clock();
 	memcpy(&lco_stat_pan,mem_stat_pan,sizeof(lco_stat_pan));
 	void *mem_stat_lco = read_from_file( test_get_fullpath(set_opt->insketchpath,sketch_stat), &file_size);
 	memcpy(&lco_stat_origin, mem_stat_lco,sizeof(lco_stat_origin));
-	if (lco_stat_pan.hash_id != lco_stat_origin.hash_id) err(EXIT_FAILURE,"%s(): %s sketcing id %d != %s id %d",__func__,set_opt->pansketchpath, lco_stat_origin.hash_id, set_opt->insketchpath, lco_stat_pan.hash_id);	
+	if (lco_stat_pan.hash_id != lco_stat_origin.hash_id) err(EXIT_FAILURE,"%s(): %s sketcing id %u != %s id %u",__func__,set_opt->pansketchpath, lco_stat_origin.hash_id, set_opt->insketchpath, lco_stat_pan.hash_id);	
 	if(lco_stat_origin.koc) printf("%s() Warning: k-mer abundances are dropped in this sketch operation\n ",__func__);
 //copy sketch stat file to result sketch
 	write_to_file(test_create_fullpath(set_opt->outdir,sketch_stat),mem_stat_lco,file_size);

@@ -42,17 +42,23 @@
    	(uint32_t) hash64; \
 })
 
-//#define SKETCH_HASH(key) ({          \
+/* abolished 
+#define SKETCH_HASH(key) ({          \
     XXH64_hash_t hash64 = XXH3_64bits_dispatch(&key, 8 );   \
     (uint32_t)(hash64 >> 32) ^ (uint32_t)hash64; \
 })
-
-
-#define GET_SKETCHING_ID(v1,v2,v3,v4,v5) ( { \
-	uint64_t test_num = 31415926; \
+//
+#define GET_SKETCHING_ID(inv1,v2,v3,v4,v5) ( { \
+	uint64_t v1 = v1, test_num = 31415926; \
   SKETCH_HASH(v1) ^ SKETCH_HASH(v2) ^ SKETCH_HASH(v3) \
   ^ SKETCH_HASH(v4) ^ SKETCH_HASH(v5) ^ SKETCH_HASH(test_num) ; \
 })
+*/
+
+inline uint32_t GET_SKETCHING_ID(uint64_t v1, uint64_t v2, uint64_t v3 ,uint64_t v4 , uint64_t v5){
+	uint64_t test_num = 31415926;
+	return SKETCH_HASH(v1) ^ SKETCH_HASH(v2) ^ SKETCH_HASH(v3) ^ SKETCH_HASH(v4) ^ SKETCH_HASH(v5) ^ SKETCH_HASH(test_num) ; 	
+}
 
 //hash 3:
 

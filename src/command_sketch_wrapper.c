@@ -55,7 +55,7 @@ sketch_opt_t sketch_opt = {
 	.hclen = 11, //
   .holen = 0,
 	.iolen = 0,
-  .drfold = 12, //diagonal
+  .drfold = 12, 
 	.kmerocrs = 1,
 	.p = 1,  // threads num: p
 	.abundance = 0, // no abundance
@@ -105,8 +105,8 @@ static error_t parse_sketch(int key, char* arg, struct argp_state* state) {
 		case 'f':
 		{
 			int val = atoi(arg);
-			 if( val < 1 || val > 24 ) {
-        printf("-f requires a integer within ranges 1..24 \n");
+			 if( val < 0 || val > 24 ) {
+        printf("-f requires a integer within ranges 0..24 \n");
         exit(1);
       }
 		  sketch_opt.drfold = val;
