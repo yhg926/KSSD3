@@ -42,7 +42,7 @@ int lsketch_union(set_opt_t* set_opt){ // for both union and uniq union
 //union operation
 	uint64_t *mem_comblco = (uint64_t *)read_from_file( test_get_fullpath(set_opt->insketchpath,combined_sketch_suffix) , &file_size);
 	uint32_t in_kmer_ct = file_size/sizeof(mem_comblco[0]);
-	khash_t(kmer_hash) *h = kh_init(kmer_hash);
+	khash_t(kmer_hash) *h = kh_init(kmer_hash); //kh_init_size(kmer_hash, (float)in_kmer_ct * 1.66 );
 	for(uint32_t i = 0; i< in_kmer_ct; i++){
 		khint_t key = kh_put(kmer_hash, h, mem_comblco[i], &ret);
 		if(ret) kh_value(h, key) = 1;

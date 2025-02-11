@@ -123,14 +123,14 @@ int reads2sketch64 (char* seqfname, char * outfname, bool abundance, int n ) {
   	if (kh_exist(h, k) && kh_value(h, k) >= n ) {
 			mem_lco[kmer_ct] = kh_key(h, k);
 			if(abundance) mem_ab[kmer_ct]	= kh_value(h, k);
-			kmer_ct++;	
+			kmer_ct++;	// only == sketch_size when n == 1;
 		}
   }
 	
-	write_to_file(outfname,mem_lco,sketch_size * sizeof(uint64_t));
+	write_to_file(outfname,mem_lco, kmer_ct * sizeof(uint64_t));
 	kh_destroy(kmer_hash, h); free(mem_lco); 
 	if(abundance){
-		write_to_file(format_string("%s.a",outfname),mem_ab,sketch_size * sizeof(uint32_t));
+		write_to_file(format_string("%s.a",outfname),mem_ab, kmer_ct * sizeof(uint32_t));
 		free(mem_ab);
 	} 	
 	return kmer_ct;// sketch_size;
