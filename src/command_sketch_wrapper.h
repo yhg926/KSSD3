@@ -16,6 +16,7 @@ typedef struct sketch_opt
 	int p ; //threads counts
 	bool abundance;
 	bool merge_comblco;
+	bool split_mfa;
 	char *fpath;
 	char *outdir; // results dir
 	char *pipecmd; //pipe command

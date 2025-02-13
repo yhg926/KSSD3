@@ -42,6 +42,7 @@ static struct argp_option opt_sketch[] =
 	{"abundance",'A',0,0,"abundance estimate mode.\v",8},
   {"threads",'p',"<INT>", 0, "Threads number to use. [1]\v",9},
 	{"merge",777,0, 0, "merge sketches, not for genome sketching.\v",10},
+	{"splitmfa",888,0, 0, "treat mfa file as many genomes.\v",11},
   { 0 }
 };
 static char doc_sketch[] =
@@ -60,6 +61,7 @@ sketch_opt_t sketch_opt = {
 	.p = 1,  // threads num: p
 	.abundance = 0, // no abundance
 	.merge_comblco = 0,
+	.split_mfa = 0,
 //  .fpath[0] ='\0',
   .outdir = "./",
 //	.pipecmd[0] = '\0', // no pipe command
@@ -157,6 +159,11 @@ static error_t parse_sketch(int key, char* arg, struct argp_state* state) {
 		case 777:
 		{
 			sketch_opt.merge_comblco = 1;
+			break;
+		}
+		case 888:
+		{
+			sketch_opt.split_mfa = 1;
 			break;
 		}
     case ARGP_KEY_ARGS:

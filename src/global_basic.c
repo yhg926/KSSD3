@@ -8,6 +8,7 @@
 #include <string.h>
 #include <err.h>
 #include <errno.h>
+#include <ctype.h>  
 #include <sys/stat.h>
 #include <dirent.h>
 #include <sys/sysinfo.h>
@@ -886,4 +887,10 @@ void free_unify_sketch (unify_sketch_t *result) {
 }
 
 
-
+void replace_special_chars_with_underscore(char *str) {
+    for (int i = 0; str[i] != '\0'; i++) {
+        if (!isalnum(str[i])) {  // If the character is not alphanumeric
+            str[i] = '_';         // Replace it with an underscore
+        }
+    }
+}

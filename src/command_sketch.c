@@ -29,6 +29,11 @@ void compute_sketch(sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat){
 	printf("Sketching method hashid = %u\tTL=%u\n", hash_id,TL);
 	uint64_t * tmp_ct_list = calloc (infile_stat->infile_num + 1, sizeof(uint64_t));	
 	mkdir_p(sketch_opt_val->outdir);
+	if(sketch_opt_val->split_mfa){
+		 compute_sketch_splitmfa ( sketch_opt_val, infile_stat);
+		return;
+	}	
+
 #pragma omp parallel for num_threads(sketch_opt_val->p) schedule(guided)	
 	for(int i = 0; i< infile_stat->infile_num; i++ ){
 		// sketching all genomes individually
@@ -189,9 +194,74 @@ int merge_comblco (sketch_opt_t * sketch_opt_val){
 
 
 
+void compute_sketch_splitmfa ( sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat){
+	
+  uint64_t tuple,crvstuple,unituple,basenum,unictx,totle_sketch_size=0;
+  uint32_t len_mv = 2*TL - 2;  //uint32_t saved_genome_num = infile_stat->infile_num, genome_num = 0; 
+  Vector sketch_index;  vector_init(&sketch_index, sizeof(uint64_t)); vector_push(&sketch_index,&totle_sketch_size);  
+	int tmpname_size_alloc = sketch_index.capacity; 
+	char (*tmpname)[PATHLEN] = malloc(tmpname_size_alloc * PATHLEN);
+  if (!tmpname) err(errno, "%s():Memory allocation failed for tmpname",__func__);
+	FILE *comb_sketch_fp;
+	if( ( comb_sketch_fp = fopen(format_string("%s/%s",sketch_opt_val->outdir,combined_sketch_suffix),"wb")) == NULL )
+    err(errno,"%s() open file error: %s/%s",__func__,sketch_opt_val->outdir,combined_sketch_suffix);	
 
+	for(int i = 0; i< infile_stat->infile_num; i++ ){
+		char* seqfname = (infile_stat->organized_infile_tab)[i].fpath;
+		gzFile infile = gzopen(seqfname, "r");  if( !infile ) err(errno,"reads2sketch64(): Cannot open file %s", seqfname);
+		kseq_t *seq = kseq_init(infile); 
+		while( kseq_read(seq) >= 0 && seq->seq.l > TL){	
+			//seq name handle
+			if(sketch_index.size >= tmpname_size_alloc) {
+				tmpname_size_alloc+= 1000;
+				tmpname = realloc(tmpname, tmpname_size_alloc * PATHLEN);
+			}
+			replace_special_chars_with_underscore(seq->name.s);
+			strncpy(tmpname[sketch_index.size - 1], seq->name.s, PATHLEN); 	
+			//sketching each fasta sequence
+			khash_t(kmer_hash) *h = kh_init(kmer_hash);
+			const char *s = seq->seq.s; int base = 0;uint32_t sketch_size = 0;
 
+			for(int pos = 0; pos < seq->seq.l ; pos++){ 
+      	if (Basemap[(unsigned short)s[pos]] == DEFAULT){ base = 0;continue;}
+      	basenum = Basemap[(unsigned short)s[pos]];
+        tuple = ( ( tuple<< 2 ) | basenum )  ;
+        crvstuple = (( crvstuple >> 2 ) | ((basenum^3LLU) << len_mv )) ;
+     		if(++base < TL) continue;
 
+      	unituple = (tuple & ctxmask) < (crvstuple & ctxmask) ? tuple : crvstuple;
+        unictx = unituple & ctxmask;
+      	if (SKETCH_HASH( unictx ) > FILTER) continue;
+      	int ret; khint_t key = kh_put(kmer_hash, h, unituple & tupmask, &ret);		
+
+      	if (ret) {
+        	kh_value(h, key) = 1;
+        	totle_sketch_size++;
+					fwrite(&kh_key(h, key),sizeof(uint64_t),1,comb_sketch_fp);
+      	} 
+    	}//for line				
+			vector_push(&sketch_index,&totle_sketch_size);
+			kh_destroy(kmer_hash, h);			
+		}//while
+		kseq_destroy(seq);gzclose(infile);	
+		printf("\r%dth/%d multifasta sketching %s completed!\t #genomes=%lu",i+1,infile_stat->infile_num,(infile_stat->organized_infile_tab)[i].fpath,sketch_index.size - 1 );
+	}//for infile
+		
+	write_to_file(test_create_fullpath(sketch_opt_val->outdir,idx_sketch_suffix),sketch_index.data,sizeof(uint64_t) * sketch_index.size );
+
+	dim_sketch_stat_t dim_sketch_stat = {
+    .hash_id =  GET_SKETCHING_ID(sketch_opt_val->hclen, sketch_opt_val->holen, sketch_opt_val->iolen, sketch_opt_val->drfold , FILTER),
+    .koc = sketch_opt_val->abundance,
+    .klen = TL,
+    .hclen = sketch_opt_val->hclen,
+    .holen = sketch_opt_val->holen,
+    .drfold = sketch_opt_val->drfold, //2^12 = 4096
+    .infile_num =  sketch_index.size - 1
+  };
+	concat_and_write_to_file(test_create_fullpath(sketch_opt_val->outdir,sketch_stat),&dim_sketch_stat,sizeof(dim_sketch_stat),tmpname,dim_sketch_stat.infile_num * PATHLEN );
+
+	fclose(comb_sketch_fp); vector_free(&sketch_index);free(tmpname);
+} 
 
 
 

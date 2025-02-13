@@ -90,6 +90,7 @@ typedef struct dim_sketch_stat
 void compute_sketch(sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat);
 int merge_comblco (sketch_opt_t * sketch_opt_val);
 int reads2sketch64 (char* seqfname,char * outfname, bool abundance, int n );
+void compute_sketch_splitmfa ( sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat);
 //void print_hash_table(khash_t(kmer_hash) *h);
 
 

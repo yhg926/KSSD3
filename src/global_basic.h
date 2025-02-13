@@ -278,7 +278,7 @@ void *read_file_mode(const char *file_path, size_t *file_size, const char *mode)
 char **read_lines_from_file(const char *file_path, int *line_count) ;
 void write_to_file(const char *file_path, const void *data, size_t data_size) ;
 void concat_and_write_to_file(const char *file_path, const void *block1, size_t size1, const void *block2, size_t size2) ;
-
+void replace_special_chars_with_underscore(char *str);
 // infile fmt count struct
 typedef struct
 {
