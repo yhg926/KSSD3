@@ -13,6 +13,10 @@
 #include <dirent.h>
 #include <sys/sysinfo.h>
 #include <math.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+
 /*global basemap and mapbase*/
 #if ALPHABET == 1 // objs compatible mode
 const int Basemap[128] =
@@ -587,6 +591,7 @@ int file_exists_in_folder(const char *folder, const char *filename) {
 
 //by chatgpt
 // fread wrapper to read the entire file into memory
+#define MAX_FREAD_SIZE (16LU*1024*1024*1024)
 void *read_from_file(const char *file_path, size_t *file_size) {
     // Open the file in binary read mode
     FILE *file = fopen(file_path, "rb");
@@ -598,24 +603,43 @@ void *read_from_file(const char *file_path, size_t *file_size) {
     if (size == -1)  err(EXIT_FAILURE, "%s(): Failed to determine file size for '%s'", __func__, file_path); 
    // Seek back to the beginning of the file
     rewind(file);
+
+    void *buffer;	
+    if(size < MAX_FREAD_SIZE) {
     // Allocate memory to hold the file contents
-    void *buffer = malloc(size);
-    if (!buffer) {
-        fclose(file);
-        err(EXIT_FAILURE, "%s(): Memory allocation failed for file '%s'", __func__, file_path);
+    	if ( (buffer = malloc(size)) == NULL) {
+        	fclose(file);
+       		 err(EXIT_FAILURE, "%s(): Memory allocation failed for file '%s'", __func__, file_path);
+    	}
+    	// Read the entire file into memory
+    	size_t read_count = fread(buffer, 1, size, file);
+    	if (read_count != (size_t)size) {
+        	free(buffer);
+        	fclose(file);
+        	err(EXIT_FAILURE, "%s(): Failed to read the file '%s' into memory", __func__, file_path);
+    	}
+    	fclose(file);
     }
-    // Read the entire file into memory
-    size_t read_count = fread(buffer, 1, size, file);
-    if (read_count != (size_t)size) {
-        free(buffer);
-        fclose(file);
-        err(EXIT_FAILURE, "%s(): Failed to read the file '%s' into memory", __func__, file_path);
+    else{ //mmap
+    	int fd = open(file_path, O_RDWR, 0666);
+	if (fd == -1) err(EXIT_FAILURE,"%s(): open %s failed",__func__, file_path); 
+	if ((buffer=mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0)) == MAP_FAILED) {
+    		close(fd);
+    		err(EXIT_FAILURE, "%s(): Failed to mmap the file '%s'", __func__, file_path);
+	} 
+        close(fd);	
     }
-    fclose(file);
     // Set the file size if a valid pointer is provided
     if (file_size)  *file_size = (size_t)size;
     return buffer;
 }
+
+void free_read_from_file (void *buffer, size_t file_size){
+	if(file_size < MAX_FREAD_SIZE) free(buffer);
+	else if(munmap(buffer,file_size) == -1) 
+		err(EXIT_FAILURE, "%s(): Failed to munmap buffer with size of '%lu'", __func__, file_size);		
+}
+
 // Function to read a file into memory (supports both text and binary modes)
 void *read_file_mode(const char *file_path, size_t *file_size, const char *mode) {
     // Validate mode input
@@ -821,7 +845,7 @@ unify_sketch_t* generic_sketch_parse(const char *qrydir) {
     if (result == NULL) {
         err(EXIT_FAILURE, "%s(): Memory allocation failed", __func__);
     }
-    size_t file_size;
+    size_t file_size, combco_fsize ;
 
     if (file_exists_in_folder(qrydir, co_dstat)) {
         result->stat_type = 1;
@@ -836,11 +860,11 @@ unify_sketch_t* generic_sketch_parse(const char *qrydir) {
         result->kmerlen = result->stats.co_stat_val.kmerlen;
         result->gname = (char (*)[PATHLEN])(result->mem_stat + sizeof(co_dstat_t) + sizeof(ctx_obj_ct_t) * result->infile_num);
 
-        unsigned int *tmp_combco = read_from_file(format_string("%s/%s.0", qrydir, skch_prefix), &file_size);
-        size_t *tmp_index_combco = read_from_file(format_string("%s/%s.0", qrydir, idx_prefix), &file_size);
+        unsigned int *tmp_combco = read_from_file(format_string("%s/%s.0", qrydir, skch_prefix), &combco_fsize);
+  	size_t *tmp_index_combco = read_from_file(format_string("%s/%s.0", qrydir, idx_prefix), &file_size);
         result->comb_sketch = malloc(sizeof(uint64_t) * tmp_index_combco[result->infile_num]);
         for (uint64_t i = 0; i < tmp_index_combco[result->infile_num]; i++) result->comb_sketch[i] = tmp_combco[i];
-		free(tmp_combco);
+		free_read_from_file(tmp_combco,combco_fsize);
         
 		if(result->stats.co_stat_val.koc) {
 			unsigned short *tmp_ab = read_from_file(format_string("%s/%s.0.a", qrydir, skch_prefix), &file_size);
@@ -880,7 +904,8 @@ unify_sketch_t* generic_sketch_parse(const char *qrydir) {
 
 void free_unify_sketch (unify_sketch_t *result) {
     if (result == NULL) return;  // Avoid dereferencing a NULL pointer   
-    free_all(result->comb_sketch,result->sketch_index,result->mem_stat,NULL);
+    free_read_from_file(result->comb_sketch,sizeof(result->comb_sketch[0])*result->sketch_index[result->infile_num] );
+    free_all(result->sketch_index,result->mem_stat,NULL);
     result->mem_stat = result->sketch_index = result->comb_sketch = NULL;
 	if(result->abundance) free(result->abundance);
 	free(result);
