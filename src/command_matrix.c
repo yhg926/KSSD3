@@ -184,7 +184,7 @@ int compute_ani_matrix(matrix_opt_t *matrix_opt){ //ref is the sketch(es) to be 
       for( int qn = 0;  qn < qry_result->infile_num; qn++) {
         for(uint64_t qi = qry_result->sketch_index[qn]; qi< qry_result->sketch_index[qn+1]; qi++){
 					khiter_t it = kh_get(u64, h, qry_result->comb_sketch[qi] & ctxmask );
-        	if( it != kh_end(h)) {
+        	if( it != kh_end(h) && kh_value(h, it) != CONFLICT_OBJ ) {
 						 ctx_diff_obj_cnt[qn].ctx_ct++;
 						if (kh_value(h, it) != qry_result->comb_sketch[qi]) 	ctx_diff_obj_cnt[qn].diff_obj++;
 					}
