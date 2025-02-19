@@ -148,3 +148,60 @@ int compute_matrix(matrix_opt_t *matrix_opt){ //ref is the sketch(es) to be hash
   return 1;
 }
 
+
+#define CONFLICT_OBJ (0)
+KHASH_MAP_INIT_INT64(u64, uint64_t)
+int compute_ani_matrix(matrix_opt_t *matrix_opt){ //ref is the sketch(es) to be hashed.
+
+  unify_sketch_t* ref_result = generic_sketch_parse(matrix_opt->refdir), *qry_result = generic_sketch_parse(matrix_opt->qrydir);
+  if(ref_result->stat_type != qry_result->stat_type) err(EXIT_FAILURE,"%s(): ref sketch type %u != qry %u",__func__,ref_result->stat_type,qry_result->stat_type);
+  else if(ref_result->hash_id != qry_result->hash_id) err(EXIT_FAILURE,"%s(): ref hash_id %u != qry %u",__func__,ref_result->hash_id,qry_result->hash_id);
+	dim_sketch_stat_t *lco_stat_readin = (dim_sketch_stat_t *) ref_result->mem_stat;
+	int obj_len = lco_stat_readin->klen - 2* lco_stat_readin->hclen;
+	if(obj_len == 0 ) err(EXIT_FAILURE,"%s() abort!: sketching mode has 0bp object",__func__);
+
+	uint64_t tmp_var =  UINT64_MAX >> (64 - 2*lco_stat_readin->hclen) ;
+	uint64_t ctxmask = (tmp_var << (2*(lco_stat_readin->klen - lco_stat_readin->hclen - lco_stat_readin->holen)) ) | (tmp_var << (2*(lco_stat_readin->holen) ));
+//  int kmerlen = ref_result->kmerlen;
+// print header
+  FILE *output = matrix_opt->outf[0]=='\0' ? stdout: fopen( matrix_opt->outf, "w");
+    if (output == NULL) err(errno,"%s(): %s",__func__, matrix_opt->outf);
+  for( int qn = 0;  qn < qry_result->infile_num; qn++)  fprintf(output,"\t%s",qry_result->gname[qn]);
+  fprintf(output,"\n");
+
+  co_distance_t *ctx_diff_obj_cnt = malloc(qry_result->infile_num * sizeof(co_distance_t));
+  for(int rn = 0; rn < ref_result->infile_num; rn++) {
+   //     int X_size = ref_result->sketch_index[rn+1] - ref_result->sketch_index[rn];
+    khash_t(u64) *h = kh_init(u64);   int ret;
+    // hash rn-th ref genome
+    for (uint64_t ri = ref_result->sketch_index[rn]; ri< ref_result->sketch_index[rn+1]; ri++) {
+       khiter_t k = kh_put(u64, h, ref_result->comb_sketch[ri] & ctxmask , &ret);
+			 if( ret == 1)  kh_value(h, k) = ref_result->comb_sketch[ri];
+			 else if (ret == 0) kh_value(h, k) = CONFLICT_OBJ ; //ret == 0: mark confict obj using 0; assuming no duplicted k-mers in a sketch   
+		}
+    memset(ctx_diff_obj_cnt,0,qry_result->infile_num * sizeof(co_distance_t));
+#pragma omp parallel for num_threads ((matrix_opt->p))
+      for( int qn = 0;  qn < qry_result->infile_num; qn++) {
+        for(uint64_t qi = qry_result->sketch_index[qn]; qi< qry_result->sketch_index[qn+1]; qi++){
+					khiter_t it = kh_get(u64, h, qry_result->comb_sketch[qi] & ctxmask );
+        	if( it != kh_end(h)) {
+						 ctx_diff_obj_cnt[qn].ctx_ct++;
+						if (kh_value(h, it) != qry_result->comb_sketch[qi]) 	ctx_diff_obj_cnt[qn].diff_obj++;
+					}
+         } // for qi
+    } // for qn
+    fprintf(output,"%s",ref_result->gname[rn]);
+    for( int qn = 0;  qn < qry_result->infile_num; qn++) {
+      //int Y_size =  qry_result->sketch_index[qn+1] - qry_result->sketch_index[qn];
+			double dist = ctx_diff_obj_cnt[qn].ctx_ct == 0 ? matrix_opt->e : (double) ctx_diff_obj_cnt[qn].diff_obj / ctx_diff_obj_cnt[qn].ctx_ct ;		
+  		double ani = pow((1 - dist),(1.0/obj_len)); 
+      fprintf(output,"\t%lf", ani);
+    }
+    fprintf(output,"\n");
+    kh_destroy(u64,h);
+    }// loop rn end
+  free_unify_sketch(ref_result); free_unify_sketch(qry_result);
+  fclose(output);
+  return 1;
+}
+

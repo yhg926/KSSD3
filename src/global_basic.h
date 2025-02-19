@@ -349,6 +349,12 @@ typedef struct {
     } stats;                        // Union of the two possible types
 } unify_sketch_t;
 
+//ctx--diff obj count type 
+typedef struct {
+	uint32_t ctx_ct;
+  uint32_t diff_obj;
+} co_distance_t ;
+
 unify_sketch_t* generic_sketch_parse(const char *qrydir) ;
 void free_unify_sketch(unify_sketch_t *result) ;
 void free_read_from_file (void *buffer, size_t file_size);

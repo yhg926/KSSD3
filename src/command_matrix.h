@@ -20,6 +20,7 @@ typedef struct matrix_opt
 	double c; //minimal distance to enrolled sketches
 	int p; //threads
 	bool d; //diagnal
+	bool ani;
 	int e;
   char qrydir[PATHLEN];
 	char refdir[PATHLEN];
@@ -33,4 +34,5 @@ typedef struct matrix_opt
 int cmd_matrix(struct argp_state* state);
 int compute_triangle(matrix_opt_t *);
 int compute_matrix(matrix_opt_t *);
+int compute_ani_matrix(matrix_opt_t *matrix_opt);
 #endif

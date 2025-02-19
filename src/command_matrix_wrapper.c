@@ -35,6 +35,7 @@ static struct argp_option opt_matrix[] =
 	{"threads",'p',"<INT>", 0, "Threads number to use \v",6},
 	{"diagonal",'d',0, 0, "set diagonal\v",7},
 	{"exception",'e',"<INT>", 0, "set distance value when XnY == 0 \v",8},
+	{"ani",'n',0, 0, "contect object: ani mode\v",9},
   { 0 }
 };
 
@@ -50,6 +51,7 @@ matrix_opt_t matrix_opt ={
 	.c = 0.0, //control duplicated sample by skip distance < c;
 	.p = 1,
 	.d = 0, //diagonal
+	.ani = 0,
 	.e = -1, //abort
 	.refdir[0] = '\0',
 	.qrydir[0] = '\0',
@@ -118,6 +120,11 @@ static error_t parse_matrix(int key, char* arg, struct argp_state* state) {
 			matrix_opt.d = 1 ;
 			break;
 		}
+    case 'n':
+    {
+      matrix_opt.ani = 1 ;
+      break;
+    }
 		case ARGP_KEY_ARGS:
 		{
 			matrix_opt.num_remaining_args = state->argc - state->next;
@@ -170,6 +177,8 @@ int cmd_matrix(struct argp_state* state)
   if (matrix_opt.qrydir[0] != '\0') {
   	if (matrix_opt.refdir[0] == '\0')
 	  	return compute_triangle(&matrix_opt);
+		else if(matrix_opt.ani)
+			return compute_ani_matrix(&matrix_opt);
 		else
 			return compute_matrix(&matrix_opt);
 	}
