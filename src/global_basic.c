@@ -455,27 +455,32 @@ llong find_lgst_primer_2pow(int w)
 }
 
 
-int nextPrime(int n){
-    int j;
-    int tag = 0;
+// Helper function to check if a number is prime
+static uint32_t is_prime(uint32_t m) {
+    if (m <= 1) return 0;
+    if (m == 2) return 1;
+    if (m % 2 == 0) return 0;
+    
+    uint32_t sqrt_m = (uint32_t)sqrt(m);
+    for (uint32_t i = 3; i <= sqrt_m; i += 2) {
+        if (m % i == 0) return 0;
+    }
+    return 1;
+}
 
-    while (1){
-        for(j=2;j<=(int)sqrt(n);j++){
-            if(n%j == 0){
-                tag = 1;
-                break;
-            }
+// Main function to find the next prime after n
+uint32_t nextPrime(uint32_t n) {
+    if (n < 2) return 2;
+    if (n == 2) return 3;
+    
+    // Start checking from the next odd number
+    uint32_t candidate = (n % 2 == 0) ? n + 1 : n + 2;
+    
+    while (1) {
+        if (is_prime(candidate)) {
+            return candidate;
         }
-        if(tag == 1){
-            if(n == 0x7FFFFFFF){
-                printf("[ERROR] n exceed 0x7FFFFFFF, Can't find a valid prime\n");
-                exit(1);
-            }
-            n++;
-            tag = 0;
-        }else{
-            return n;
-        }
+        candidate += 2; // Skip even numbers
     }
 }
 
@@ -776,7 +781,8 @@ void vector_free(Vector *vec) {
 // Add an element to the vector
 void vector_push(Vector *vec, const void *element) {
     if (vec->size == vec->capacity) {
-        size_t new_capacity = vec->capacity == 0 ? 4 : vec->capacity * 2;
+//        size_t new_capacity = vec->capacity == 0 ? 4 : vec->capacity * 2;
+        size_t new_capacity = vec->capacity == 0 ? 2 : vec->capacity + 2;
         vec->data = realloc(vec->data, new_capacity * vec->element_size);
         if (vec->data == NULL) {
             fprintf(stderr, "Failed to allocate memory\n");

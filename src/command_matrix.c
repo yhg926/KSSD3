@@ -194,7 +194,7 @@ int compute_ani_matrix(matrix_opt_t *matrix_opt){ //ref is the sketch(es) to be 
     for( int qn = 0;  qn < qry_result->infile_num; qn++) {
       //int Y_size =  qry_result->sketch_index[qn+1] - qry_result->sketch_index[qn];
 			double ani = 0;
-			if(ctx_diff_obj_cnt[qn].ctx_ct != 0) {										
+			if(ctx_diff_obj_cnt[qn].ctx_ct > 100) {										
 				double dist = (double) ctx_diff_obj_cnt[qn].diff_obj / ctx_diff_obj_cnt[qn].ctx_ct ;
 				ani = pow((1 - dist),(1.0/obj_len));
 			}

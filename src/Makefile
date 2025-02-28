@@ -1,7 +1,7 @@
 CC=gcc
-CFLAGS= -std=gnu11 -Wno-format-overflow -Wno-unused-result -O3 -ggdb -fopenmp
+CFLAGS= -std=gnu11 -Wno-format-overflow -Wno-unused-result -O3 -ggdb -march=native -fopenmp 
 all:
-	$(CC) $(CFLAGS)  *.c -o ./kssd3 -Iklib -lz -lm
+	$(CC) $(CFLAGS)  *.c -o ./kssd3 -Iklib -lz -lm 
 csz8:
 	$(CC) $(CFLAGS) -DCOMPONENT_SZ=8 *.c -o ./kssd3_CSZ8 -lm
 strange:

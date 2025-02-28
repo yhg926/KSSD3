@@ -87,7 +87,8 @@ extern const int Basemap[128];
 extern const char Mapbase[];
 extern const unsigned int primer[25];
 llong find_lgst_primer_2pow(int w);
-int nextPrime(int);
+#include <stdint.h>
+uint32_t nextPrime(uint32_t);
 /* orgnized infile table*/
 
 typedef struct infile_entry { 
