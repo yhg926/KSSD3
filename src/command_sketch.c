@@ -164,7 +164,6 @@ int seq2ht_sortedctxobj64 (char* seqfname, char * outfname, bool abundance, int 
 			unituple = (tuple & ctxmask) < (crvstuple & ctxmask) ? tuple : crvstuple;
       		unictx = unituple & ctxmask;
 			if (SKETCH_HASH( unictx ) > FILTER) continue;						
-if(0x41be5ffdf24b6eaf ==  uint64_kmer2ctxobj(unituple)) printf("normal mode found\n");
 			int ret; khint_t key = kh_put(sort64, h, uint64_kmer2ctxobj(unituple) , &ret);
 
 			if (ret) { 
@@ -769,7 +768,6 @@ void read_genomes2mem2sortedctxobj64 (sketch_opt_t * sketch_opt_val, infile_tab_
         	unituple = (tuple & ctxmask) < (crvstuple & ctxmask) ? tuple : crvstuple;
         	unictx = unituple & ctxmask;
         	if (SKETCH_HASH( unictx ) > FILTER) continue;
-if(0xd97d6f964d068d6f ==  uint64_kmer2ctxobj(unituple)) printf("i=%d\tnum=%d\tj=%d\tpos=%d\tlen=%d\tgnum=%d\n%s\n%s\n",i,num,j,pos,len,gseq_nums[i+1],s,s+pos);
 
         	int ret; khint_t key = kh_put(sort64, h, uint64_kmer2ctxobj(unituple), &ret);
         	if (ret)  kh_value(h, key) = 1;
