@@ -22,13 +22,19 @@ void print_lco_gnames(set_opt_t* set_opt){
 }
 
 void show_content(set_opt_t* set_opt){
-	unify_sketch_t *result = generic_sketch_parse(set_opt->insketchpath);
-	for(int i = 0 ; i< result->infile_num;i++){
-		for(uint64_t j = result->sketch_index[i]; j < result->sketch_index[i+1]; j++ ){
-			printf("%d\t%lx\n",i,result->comb_sketch[j]);
+	uint64_t *sketch_index = read_from_file( test_get_fullpath(set_opt->insketchpath,idx_sketch_suffix) , &file_size);
+	int infile_num = file_size/sizeof(uint64_t) - 1;	
+	uint64_t kmer; FILE *fp;
+	if((fp=fopen(test_get_fullpath(set_opt->insketchpath,combined_sketch_suffix),"rb")) == NULL) 
+		err(EXIT_FAILURE, "%s(): Failed to open file '%s/%s'", __func__, set_opt->insketchpath,combined_sketch_suffix);
+	for(int i = 0 ; i< infile_num;i++){
+		for(uint64_t j = sketch_index[i]; j < sketch_index[i+1]; j++ ){
+			fread(&kmer,sizeof(kmer),1,fp);
+			printf("%d\t%lx\n",i,kmer);
 		}
 	}
-	free_unify_sketch(result);
+	free(sketch_index);
+	fclose(fp);
 }
 
 KHASH_MAP_INIT_INT64(kmer_hash, int)
