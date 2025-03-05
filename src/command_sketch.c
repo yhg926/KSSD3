@@ -751,7 +751,7 @@ void read_genomes2mem2sortedctxobj64 (sketch_opt_t * sketch_opt_val, infile_tab_
 		 	  
     int num = infile_num_p % batch_size + 1 ;
 		for( int i = 0; i < num; i++ ) gseq_nums[i+1] += gseq_nums[i];
-//#pragma omp parallel for num_threads(sketch_opt_val->p)
+#pragma omp parallel for num_threads(sketch_opt_val->p)
 		 for(uint32_t i = 0; i < num ; i++ ){
        khash_t(sort64) *h = kh_init(sort64);
 			 for(uint32_t j = gseq_nums[i] ; j< gseq_nums[i+1] ; j++ ) {
