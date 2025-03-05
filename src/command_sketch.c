@@ -164,6 +164,7 @@ int seq2ht_sortedctxobj64 (char* seqfname, char * outfname, bool abundance, int 
 			unituple = (tuple & ctxmask) < (crvstuple & ctxmask) ? tuple : crvstuple;
       		unictx = unituple & ctxmask;
 			if (SKETCH_HASH( unictx ) > FILTER) continue;						
+if(0x41be5ffdf24b6eaf ==  uint64_kmer2ctxobj(unituple)) printf("normal mode found\n");
 			int ret; khint_t key = kh_put(sort64, h, uint64_kmer2ctxobj(unituple) , &ret);
 
 			if (ret) { 
@@ -751,13 +752,13 @@ void read_genomes2mem2sortedctxobj64 (sketch_opt_t * sketch_opt_val, infile_tab_
 		 	  
     int num = infile_num_p % batch_size + 1 ;
 		for( int i = 0; i < num; i++ ) gseq_nums[i+1] += gseq_nums[i];
-#pragma omp parallel for num_threads(sketch_opt_val->p)
+//#pragma omp parallel for num_threads(sketch_opt_val->p)
 		 for(uint32_t i = 0; i < num ; i++ ){
        khash_t(sort64) *h = kh_init(sort64);
 			 for(uint32_t j = gseq_nums[i] ; j< gseq_nums[i+1] ; j++ ) {
 				char *s = *(char**)vector_get(&all_reads,j);
 				int len = strlen(s); if(len < klen ) continue;
-				int base; uint64_t tuple,crvstuple,unituple,basenum,unictx;
+				int base = 0; uint64_t tuple,crvstuple,unituple,basenum,unictx;
       	for(int pos = 0; pos < len ; pos++){
         	if (Basemap[(unsigned short)s[pos]] == DEFAULT){ base = 0;continue;}
         	basenum = Basemap[(unsigned short)s[pos]];
@@ -768,6 +769,8 @@ void read_genomes2mem2sortedctxobj64 (sketch_opt_t * sketch_opt_val, infile_tab_
         	unituple = (tuple & ctxmask) < (crvstuple & ctxmask) ? tuple : crvstuple;
         	unictx = unituple & ctxmask;
         	if (SKETCH_HASH( unictx ) > FILTER) continue;
+if(0xd97d6f964d068d6f ==  uint64_kmer2ctxobj(unituple)) printf("i=%d\tnum=%d\tj=%d\tpos=%d\tlen=%d\tgnum=%d\n%s\n%s\n",i,num,j,pos,len,gseq_nums[i+1],s,s+pos);
+
         	int ret; khint_t key = kh_put(sort64, h, uint64_kmer2ctxobj(unituple), &ret);
         	if (ret)  kh_value(h, key) = 1;
       	}//nt pos loop
