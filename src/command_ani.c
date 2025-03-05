@@ -1,4 +1,5 @@
 #include "command_ani.h"
+#include "command_matrix.h"
 #include "global_basic.h"
 #include "kssdlib_sort.h"
 #include <assert.h>
@@ -31,7 +32,7 @@ int compute_ani(ani_opt_t *ani_opt){ //ref is the sketch(es) to be hashed.
 
 }
 
-
+void check_comb_sortedsketch64 ( unify_sketch_t* result);
 void gen_inverted_index4comblco(const char *refdir) {
 
 	time_t seconds = time(NULL) ;
@@ -41,26 +42,20 @@ void gen_inverted_index4comblco(const char *refdir) {
     if (sketch_size > (float) UINT32_MAX * LD_FCTR ) err(EXIT_FAILURE,"%s():sketch_index maximun %lu exceed UINT32_MAX*LF;%f",__func__, sketch_size,(float) UINT32_MAX * LD_FCTR);
 	if( ref_result->infile_num >= ( 1<<GID_NBITS )) err(EXIT_FAILURE,"%s(): genome numer %d exceed maximum:%u",__func__,ref_result->infile_num,1<<GID_NBITS);
 	if(GID_NBITS + 4*hclen >64) err(EXIT_FAILURE,"%s(): context_bits_len(%d)+gid_bits_len(%d) exceed 64",__func__,4*hclen,GID_NBITS);
-
-	printf("time1=%ld\n", time(NULL) - seconds );
-	sketch64_2ctxobj64(ref_result->sketch_index, ref_result->comb_sketch, ref_result->infile_num, sketch_size, klen,hclen,holen );	
-    printf("time1.5=%ld\n", time(NULL) - seconds );
-//	free(ref_result->comb_sketch);
-    #pragma omp parallel for num_threads(32) schedule(guided)
-	    for( uint32_t rn = 0; rn < ref_result->infile_num; rn++) {
-				qsort( ref_result->comb_sketch + ref_result->sketch_index[rn] , ref_result->sketch_index[rn+1] - ref_result->sketch_index[rn], sizeof(uint64_t), qsort_comparator_uint64);
-		}
-    printf("time2=%ld\n", time(NULL) - seconds );
-	ctxgidobj_t *ctxgidobj_arr = ctxobj64_2ctxgidobj(ref_result->sketch_index, ref_result->comb_sketch, ref_result->infile_num, sketch_size, klen,hclen,holen );
-//	uint96_t *uint96co = sketch64_2uint96co(ref_result->sketch_index, ref_result->comb_sketch, ref_result->infile_num, sketch_size, klen,hclen,holen );
-//	free(ref_result->comb_sketch);
-	ctxgidobj_sort_array(ctxgidobj_arr, sketch_size) ; //	sort_uint96_array(uint96co, sketch_size) ;
+	printf("time1=%ld\n", time(NULL) - seconds );//	check_comb_sortedsketch64 ( ref_result);
+	comb_sortedsketch64Xcomb_sortedsketch64 ( ref_result, ref_result );
+  printf("time2=%ld\n", time(NULL) - seconds );
+	ctxgidobj_t *ctxgidobj_arr = ctxobj64_2ctxgidobj(ref_result->sketch_index, ref_result->comb_sketch, ref_result->infile_num, sketch_size, klen,hclen,holen);
+  printf("time3=%ld\n", time(NULL) - seconds );
+	ctxgidobj_sort_array(ctxgidobj_arr, sketch_size) ; 
+  printf("time4=%ld\n", time(NULL) - seconds );
 	sort_sketch_summary_t *sort_sketch_summary = summarize_ctxgidobj_arr(ctxgidobj_arr, ref_result->sketch_index, sketch_size, ref_result->infile_num);
-
-    sorted_ctxgidobj_arrXcomb_sortedsketch64 ( ref_result, ctxgidobj_arr, sort_sketch_summary );
-printf("time4=%ld\n", time(NULL) - seconds );
+  printf("time5=%ld\n", time(NULL) - seconds );
+  sorted_ctxgidobj_arrXcomb_sortedsketch64 ( ref_result, ctxgidobj_arr, sort_sketch_summary );
+printf("time6=%ld\n", time(NULL) - seconds );
 	free_sort_sketch_summary(sort_sketch_summary);
-
+  free_unify_sketch(ref_result);	
+	free(ctxgidobj_arr);
 }
 
 void const_comask_init(dim_sketch_stat_t *lco_stat_val ){
@@ -70,22 +65,22 @@ void const_comask_init(dim_sketch_stat_t *lco_stat_val ){
 	hclen = lco_stat_val->hclen; 
 	iolen = klen - 2*(hclen + holen);
  
-    Bitslen.ctx = 4*hclen;
+  Bitslen.ctx = 4*hclen;
 	Bitslen.gid = GID_NBITS;
 	Bitslen.obj = 2*klen-4*hclen ;
 
 	ho_mask_len = holen == 0? 0: UINT64_MAX >> (64 - 2*holen);
-    hc_mask_len = hclen == 0? 0: UINT64_MAX >> (64 - 2*hclen) ;
-    io_mask_len = iolen == 0? 0: UINT64_MAX >> (64 - 2*iolen) ; //UINT64_MAX >> 64 is undefined  not 0
+  hc_mask_len = hclen == 0? 0: UINT64_MAX >> (64 - 2*hclen) ;
+  io_mask_len = iolen == 0? 0: UINT64_MAX >> (64 - 2*iolen) ; //UINT64_MAX >> 64 is undefined  not 0
 
-    ho_mask_left = ho_mask_len << (2*(klen-holen));//(2*(holen + hclen + iolen + hclen));
-    hc_mask_left = hc_mask_len << (2*(holen + hclen + iolen));//2*(holen + hclen + iolen));
-    io_mask = io_mask_len << (2*(holen + hclen));
-    hc_mask_right = hc_mask_len << (2*holen);
-    ho_mask_right = ho_mask_len;
+  ho_mask_left = ho_mask_len << (2*(klen-holen));//(2*(holen + hclen + iolen + hclen));
+  hc_mask_left = hc_mask_len << (2*(holen + hclen + iolen));//2*(holen + hclen + iolen));
+  io_mask = io_mask_len << (2*(holen + hclen));
+  hc_mask_right = hc_mask_len << (2*holen);
+  ho_mask_right = ho_mask_len;
 	
-    ctxmask = hc_mask_left | hc_mask_right ;
-    gid_mask = (1U<< GID_NBITS) - 1 ;
+  ctxmask = hc_mask_left | hc_mask_right ;
+  gid_mask = (1U<< GID_NBITS) - 1 ;
 }
 
 
@@ -219,7 +214,7 @@ printf("flg7:OK\n");
 		
 }
 //2. inverted index(i.e. global sorted_ctxgidobj_arr) X common index(i.e. genome-wise sorted comb_sortedsketch64 ) :
-// the fastest
+// ** the fatest method when dist matrix is sparse
 void sorted_ctxgidobj_arrXcomb_sortedsketch64 ( unify_sketch_t* qry_result, ctxgidobj_t* ctxgidobj_arr, sort_sketch_summary_t *sort_sketch_summary ){
 	
 	uint64_t* qry_sketch_index = qry_result->sketch_index;
@@ -241,20 +236,17 @@ void sorted_ctxgidobj_arrXcomb_sortedsketch64 ( unify_sketch_t* qry_result, ctxg
 		const uint64_t *a = qry_comb_sketch + qry_sketch_index[rn]; 
 		size_t a_size = qry_sketch_index[rn+1] - qry_sketch_index[rn];		
 		size_t* idx = find_first_occurrences_AT_ctxgidobj_arr (a, a_size, ctxgidobj_arr , ref_arrlen);
-
-        for(int i = 0; i< a_size; i++ ){
-			if(idx[i]==SIZE_MAX) continue;
+      for(int i = 0; i< a_size; i++ ){
+			  if(idx[i]==SIZE_MAX) continue;
 			for(int d = idx[i];  ; d++){			
 				uint32_t gid = ctxgidobj_arr[d].ctxgid & gidmask;
 				if (gid >= rn || (ctxgidobj_arr[d].ctxgid >> Bitslen.gid) != (a[i] >> Bitslen.obj)) break;
 				CTX(rn, gid)++;
 				if(a[i] & objmask != ctxgidobj_arr[d].obj) OBJ(rn,gid)++;
 			}			
-		}			
-		
+		}				
 	   free(idx);
-	//   printf("%u\n",rn);
-    }	
+   }	
 
 /*
    for( uint32_t rn = 0; rn < qry_infile_num; rn++){
@@ -267,9 +259,55 @@ void sorted_ctxgidobj_arrXcomb_sortedsketch64 ( unify_sketch_t* qry_result, ctxg
 }//end
 
 //3. common index X common index (i.e. genome-wise sorted comb_sortedsketch64 ):
-// most convience and memory efficience. speed is acceptable when infile_num is < 1000. no invert indxeing needed
-// code omitted, hits: use paris wise small sortted arrays overlapping  
+//    code hits: use paris wise small sortted arrays overlapping
+/*  Advatages:
+		** immediate output (no need precompute dist matrix )	
+		** most convience and memory efficience, no invert indxeing needed  
+    ** when genome are highly similar (dense dist matrix) speed is even faster than inverted index(i.e. global sorted_ctxgidobj_arr) X common index
+		** small sortted arrays overlapping is ~ 2X-3X faster than hashtable lookup based overlapping.
 //...
+*/
+
+void comb_sortedsketch64Xcomb_sortedsketch64 ( unify_sketch_t* ref_result, unify_sketch_t* qry_result ){
+//#pragma omp parallel for num_threads(32) schedule(guided)	
+	for(uint32_t rn = 0; rn < ref_result->infile_num; rn++){
+
+		uint64_t *arr_ref = ref_result->comb_sketch + ref_result->sketch_index[rn];
+		size_t len_ref = ref_result->sketch_index[rn + 1] - ref_result->sketch_index[rn]; 
+		printf("%s",ref_result->gname[rn]);
+
+		for(uint32_t qn = 0; qn < qry_result->infile_num; qn++){
+		    uint64_t *arr_qry = qry_result->comb_sketch + qry_result->sketch_index[qn];
+    		size_t len_qry = qry_result->sketch_index[qn + 1] - qry_result->sketch_index[qn];			
+			  size_t XnY = count_overlaps(arr_ref,len_ref,arr_qry,len_qry);
+			  double dist = get_mashD(klen,len_ref,len_qry,XnY);
+				printf("\t%lf", 1-dist);
+		}
+		printf("\n");
+	}
+
+}
+void check_comb_sortedsketch64 ( unify_sketch_t* result){
+	for(uint32_t rn = 0; rn < result->infile_num; rn++){
+		uint64_t *arr = result->comb_sketch + result->sketch_index[rn];			
+    size_t len = result->sketch_index[rn + 1] - result->sketch_index[rn];
+		for(uint32_t i = 1 ; i < len; i++){
+			if (arr[i] < arr[i-1] )	err(EXIT_FAILURE,"%s(): %dth genome %dth kmer < %dth kmer (%lx<%lx)", __func__,rn,i,i-1,arr[i],arr[i-1] )	;
+		}
+	} 
+}
+
+
+
+
+
+
+
+
+
+
+
+
 
 //
 
@@ -316,21 +354,6 @@ size_t* find_first_occurrences_AT_ctxgidobj_arr (const uint64_t *a, size_t a_siz
 
     return indices;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

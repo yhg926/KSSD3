@@ -781,8 +781,7 @@ void vector_free(Vector *vec) {
 // Add an element to the vector
 void vector_push(Vector *vec, const void *element) {
     if (vec->size == vec->capacity) {
-//        size_t new_capacity = vec->capacity == 0 ? 4 : vec->capacity * 2;
-        size_t new_capacity = vec->capacity == 0 ? 2 : vec->capacity + 2;
+        size_t new_capacity = vec->capacity == 0 ? 4 : vec->capacity * 2;
         vec->data = realloc(vec->data, new_capacity * vec->element_size);
         if (vec->data == NULL) {
             fprintf(stderr, "Failed to allocate memory\n");
@@ -802,10 +801,16 @@ void *vector_get(Vector *vec, size_t index) {
     }
     return (char *)vec->data + index * vec->element_size;
 } 
-
+void vector_reserve(Vector *v, size_t new_capacity) {
+    if (new_capacity > v->capacity) {
+        void *new_data = realloc(v->data, new_capacity * v->element_size);
+        if (!new_data) exit(EXIT_FAILURE);
+        v->data = new_data;
+        v->capacity = new_capacity;
+    }
+}
 //free all
 #include <stdarg.h>
-
 void free_all(void *first, ...) {
     va_list args;
     va_start(args, first);

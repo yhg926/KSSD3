@@ -31,6 +31,10 @@ typedef struct matrix_opt
 
 } matrix_opt_t;
 
+double get_mashD (uint32_t K, uint32_t X, uint32_t Y, uint32_t XnY);
+
+double get_aafD (uint32_t K, uint32_t X, uint32_t Y, uint32_t XnY);
+typedef double (*Dist) (uint32_t,uint32_t,uint32_t,uint32_t);
 int cmd_matrix(struct argp_state* state);
 int compute_triangle(matrix_opt_t *);
 int compute_matrix(matrix_opt_t *);

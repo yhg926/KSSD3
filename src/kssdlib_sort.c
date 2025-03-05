@@ -2,10 +2,92 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <omp.h>
+#include <err.h>
+#include <errno.h>
 
 #define INSERTION_THRESHOLD 32
 #define PARALLEL_THRESHOLD (1 << 24)  // 16M elements per task
 
+/* related methods for already sorted array  */
+//1. array deduplicate 
+size_t dedup_sorted_uint64(uint64_t *arr, size_t n) {
+    if (n <= 1) return n;  // Handle empty/single-element cases
+
+    size_t j = 0;  // Position for next unique element
+    
+    for (size_t i = 1; i < n; i++) {
+        if (arr[i] != arr[j]) {
+            j++;
+            arr[j] = arr[i];  // Shift unique element forward
+        }
+    }
+    
+    return j + 1;  // New array length
+}
+
+/**
+ * 2. Deduplicates sorted uint64 array and returns occurrence counts
+ * 
+ * @param arr     Sorted array (modified in-place)
+ * @param n       Number of elements in input array
+ * @param counts  Output parameter for occurrence counts array
+ * @return        New length of deduplicated array
+ */
+size_t dedup_with_counts(uint64_t *arr, size_t n, uint32_t **counts) {
+    if (n == 0) {
+        *counts = NULL;
+        return 0;
+    }
+
+    // Allocate maximum possible size for counts
+    uint32_t *cnt = malloc(n * sizeof(uint32_t));
+    if (!cnt) {
+        // Fallback: deduplicate without counts
+        size_t j = 0;
+        for (size_t i = 1; i < n; i++) {
+            if (arr[i] != arr[j]) arr[++j] = arr[i];
+        }
+        *counts = NULL;
+        return j + 1;
+    }
+
+    size_t j = 0;
+    cnt[j] = 1;
+
+    // Single pass with count tracking
+    for (size_t i = 1; i < n; i++) {
+        if (arr[i] == arr[j]) {
+            cnt[j]++;
+        } else {
+            arr[++j] = arr[i];
+            cnt[j] = 1;
+        }
+    }
+
+    // Trim counts array to actual size
+    uint32_t *tmp = realloc(cnt, (j + 1) * sizeof(uint32_t));
+    *counts = tmp ? tmp : cnt;  // Keep original if realloc fails
+    
+    return j + 1;
+}
+/* Usage example: 
+  int main() {
+    uint64_t arr[] = {1, 1, 2, 2, 2, 3, 4, 4, 4, 4};
+    size_t n = sizeof(arr)/sizeof(arr[0]);
+    uint32_t *counts;
+
+    size_t new_len = dedup_with_counts(arr, n, &counts);
+    
+    // arr[] = {1, 2, 3, 4} 
+    // counts = {2, 3, 1, 4}
+    // new_len = 4
+
+    free(counts);
+    return 0;
+}
+*/
+
+//* cumstom array sorting Methods *//
 /*0. qsort comparator */
 int qsort_comparator_uint64 (const void *a, const void *b){
 	const uint64_t val_a = *(const uint64_t *)a;
@@ -13,7 +95,7 @@ int qsort_comparator_uint64 (const void *a, const void *b){
     return (val_a > val_b) - (val_a < val_b);
 }
 
-/* Method1: paralle cumstom sort */
+/* Method1: paralle cumstom sort for uint96_t */
 // Comparison function for uint96_t
 static inline int uint96_less(const uint96_t *a, const uint96_t *b) {
     if (a->part[0] != b->part[0]) return a->part[0] < b->part[0];
@@ -268,3 +350,68 @@ size_t count_overlaps(const uint64_t *a, size_t n,
         return count_overlaps_two_pointers(a, n, b, m);
     }
 }
+
+/*Methods 4 sort khash */
+int cmp_kv_pair(const void *a, const void *b) {
+    const kv_pair_t *pa = (const kv_pair_t *)a;
+    const kv_pair_t *pb = (const kv_pair_t *)b;
+    if (pa->key < pb->key) return -1;
+    else if (pa->key > pb->key) return 1;
+    else return 0;
+}
+
+// Input: pointer to a khash table of type kmer_hash
+// Output: SortedArrays struct containing pointers to the sorted key and value arrays, and the array length.
+SortedKV_Arrays_t sort_khash_u64 (khash_t(sort64) *h) {
+    SortedKV_Arrays_t result = {0};
+    size_t n = kh_size(h);
+    result.len = n;
+
+    // Allocate temporary array to hold key-value pairs.
+    kv_pair_t *pairs = malloc(n * sizeof(kv_pair_t));
+    if (!pairs)  err(EXIT_FAILURE, "%s():Memory allocation failed.",__func__);       
+    // Iterate over the hash table to collect valid entries.
+    size_t idx = 0;
+    khiter_t k;
+    for (k = kh_begin(h); k != kh_end(h); ++k) {
+        if (kh_exist(h, k)) {
+            pairs[idx].key = kh_key(h, k);
+            pairs[idx].value = kh_value(h, k);
+            idx++;
+        }
+    }
+    // Sort the key-value pairs by key.
+    qsort(pairs, n, sizeof(kv_pair_t), cmp_kv_pair);
+
+    // Allocate arrays for the sorted keys and values.
+    result.keys = malloc(n * sizeof(uint64_t));
+    result.values = malloc(n * sizeof(uint32_t));
+    if (!result.keys || !result.values) err(EXIT_FAILURE, "%s():Memory allocation failed.",__func__);
+    // Copy the sorted keys and values into the arrays.
+    for (size_t i = 0; i < n; i++) {
+        result.keys[i] = pairs[i].key;
+        result.values[i] = pairs[i].value;
+    }
+    free(pairs);
+    return result;
+}
+
+void filter_n_SortedKV_Arrays(SortedKV_Arrays_t *result, uint32_t n){
+	uint32_t kmer_ct  = 0;
+  for(uint32_t i=0; i< result->len; i++) {
+  	if(result->values[i] >= n) {
+    	result->keys[kmer_ct] = result->keys[i];
+	    result->values[kmer_ct] = result->values[i];
+      kmer_ct++;
+    }
+  }
+	result->len	= kmer_ct;
+}
+/*
+void free_SortedKV_Arrays (SortedKV_Arrays_t result){
+	free(result.keys);
+	if(result.values != NULL) free(result->values);
+	
+}
+
+*/

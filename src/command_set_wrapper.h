@@ -22,6 +22,7 @@ typedef struct set_opt
   bool q2markerdb;
   int p;
   int P;
+	int show;
   int num_remaining_args;
   char ** remaining_args;
   char insketchpath[PATHLEN];

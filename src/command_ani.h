@@ -59,6 +59,8 @@ sort_sketch_summary_t *summarize_ctxgidobj_arr(ctxgidobj_t* ctxgidobj_arr, uint6
 void free_sort_sketch_summary(sort_sketch_summary_t * sort_sketch_summary);
 //void sorted_ctxgidobj_arr2triangle (ctxgidobj_t* ctxgidobj_arr, sort_sketch_summary_t *sort_sketch_summary);
 void sorted_ctxgidobj_arrXcomb_sortedsketch64 ( unify_sketch_t* qry_result, ctxgidobj_t* ctxgidobj_arr, sort_sketch_summary_t *sort_sketch_summary );
+void comb_sortedsketch64Xcomb_sortedsketch64 ( unify_sketch_t* ref_result, unify_sketch_t* qry_result );
+
 size_t* find_first_occurrences_AT_ctxgidobj_arr (const uint64_t *a, size_t a_size, const ctxgidobj_t *b, size_t b_size);
 
 //inline functions

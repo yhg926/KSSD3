@@ -19,6 +19,7 @@ static struct argp_option opt_set[] =
 //	{"combin_pan",'c',0,  0, "combine pan files to combco file.\v",4 },
 	{"threads",'p',"<INT>",  0, "number of threads.\v",5 },
 	{"print",'P',0,  0, "print genome names.\v",5 },
+	{"psketch",777,0,  0, "print sketch content.\v",5 },
 	{"grouping",'g',"<file.tsv>",0,"grouping genomes by input category file.\v",5},
 	{"outdir",'o',"<path>",0,"specify the output directory.\v",6},
   { 0 }
@@ -37,6 +38,7 @@ set_opt_t set_opt = {
 .q2markerdb = 0, // when -q set, generate markerdb instead of uniq union set, only for lco sketch 
 .p = 1,
 .P = 0,
+.show = 0,
 .num_remaining_args = 0,
 .remaining_args = NULL,			
 .insketchpath[0] = '\0',
@@ -119,6 +121,11 @@ static error_t parse_set(int key, char* arg, struct argp_state* state) {
 			set_opt.q2markerdb = 1; 
 			break;
 		}
+		case 777:
+		{
+			set_opt.show = 1;
+			break;	
+		}
 		case ARGP_KEY_ARGS:
 			strcpy(set_opt.insketchpath, state->argv[state->next]);
 			set_opt.num_remaining_args = state->argc - state->next;
@@ -198,6 +205,9 @@ int cmd_set(struct argp_state* state)
 				else if(file_exists_in_folder(set_opt.insketchpath,sketch_stat)) print_lco_gnames(&set_opt);
 				else printf("%s is not a valid sketch\n",set_opt.insketchpath );
 
+			}
+			else if(set_opt.show > 0){
+					if(file_exists_in_folder(set_opt.insketchpath,sketch_stat)) show_content(&set_opt);
 			}
 			else if (set_opt.subsetf[0]!='\0') {
 				if(file_exists_in_folder(set_opt.insketchpath,co_dstat))

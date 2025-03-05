@@ -88,10 +88,20 @@ typedef struct dim_sketch_stat
 // define khash type
 
 void compute_sketch(sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat);
+void combine_lco( sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat);
 int merge_comblco (sketch_opt_t * sketch_opt_val);
+//sketchuing methods family
+// produce sorted sketch
+void read_genomes2mem2sortedctxobj64 (sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat, int batch_size);
 int reads2sketch64 (char* seqfname,char * outfname, bool abundance, int n );
-void compute_sketch_splitmfa ( sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat);
+int seq2ht_sortedctxobj64 (char* seqfname, char * outfname, bool abundance, int n ) ;
+int seq2sortedsketch64(char* seqfname,char * outfname, bool abundance, int n );
+int opt_seq2sortedsketch64(char* seqfname, char * outfname, bool abundance, int n) ;
+int opt2_seq2sortedsketch64(char* seqfname, char * outfname, bool abundance, int n) ; // no SIMD optimization
+// produce sketch without sort
+//void compute_sketch_splitmfa ( sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat);
+void mfa2sortedctxobj64( sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat);
 //void print_hash_table(khash_t(kmer_hash) *h);
-
+void write_sketch_stat (sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat);
 
 #endif

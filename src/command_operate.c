@@ -21,6 +21,15 @@ void print_lco_gnames(set_opt_t* set_opt){
 	free_all(mem_stat,mem_index,NULL)	;
 }
 
+void show_content(set_opt_t* set_opt){
+	unify_sketch_t *result = generic_sketch_parse(set_opt->insketchpath);
+	for(int i = 0 ; i< result->infile_num;i++){
+		for(uint64_t j = result->sketch_index[i]; j < result->sketch_index[i+1]; j++ ){
+			printf("%d\t%lx\n",i,result->comb_sketch[j]);
+		}
+	}
+	free_unify_sketch(result);
+}
 
 KHASH_MAP_INIT_INT64(kmer_hash, int)
 

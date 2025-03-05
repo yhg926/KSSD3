@@ -332,7 +332,7 @@ void vector_init(Vector *vec, size_t element_size);
 void vector_free(Vector *vec) ;
 void vector_push(Vector *vec, const void *element);
 void *vector_get(Vector *vec, size_t index);
-
+void vector_reserve(Vector *v, size_t new_capacity);
 // union type for both combco and comblco sketch
 typedef struct {
     int stat_type;                  // 1 = 32-bit sketch, 2 = 64-bit sketch
