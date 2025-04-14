@@ -131,7 +131,7 @@ typedef struct co_dirstat
 /*comblco stat file type*/
 typedef struct dim_sketch_stat
 {
-  unsigned int hash_id; // sketching type coding
+  uint32_t hash_id; // sketching type coding
   bool koc;
   int klen; // full length of kmer, 8..31
   int hclen; // half context length,
@@ -343,7 +343,7 @@ typedef struct {
 	uint32_t *abundance;
     int infile_num;                 // Number of input files
     int kmerlen;                    // K-mer length
-	unsigned int hash_id;           // hash_id or shuf_id
+	uint32_t hash_id;           // hash_id or shuf_id
     union {
         co_dstat_t co_stat_val;     // 32-bit sketch statistics
         dim_sketch_stat_t lco_stat_val; // 64-bit sketch statistics

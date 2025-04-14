@@ -89,6 +89,11 @@ size_t dedup_with_counts(uint64_t *arr, size_t n, uint32_t **counts) {
 
 //* cumstom array sorting Methods *//
 /*0. qsort comparator */
+int qsort_comparator_uint32 (const void *a, const void *b){
+    const uint32_t val_a = *(const uint32_t *)a;
+    const uint32_t val_b = *(const uint32_t *)b;
+    return (val_a > val_b) - (val_a < val_b);
+}
 int qsort_comparator_uint64 (const void *a, const void *b){
 	const uint64_t val_a = *(const uint64_t *)a;
 	const uint64_t val_b = *(const uint64_t *)b;   

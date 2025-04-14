@@ -17,6 +17,7 @@ typedef struct sketch_opt
 	bool abundance;
 	bool merge_comblco;
 	bool split_mfa;
+	char index[PATHLEN];
 	char *fpath;
 	char *outdir; // results dir
 	char *pipecmd; //pipe command
@@ -25,7 +26,10 @@ typedef struct sketch_opt
 } sketch_opt_t;
 
 int cmd_sketch(struct argp_state* state);
+/*
 extern void compute_sketch(sketch_opt_t*, infile_tab_t*);
+extern void gen_inverted_index4comblco(const char* sketchdir);
 extern int merge_comblco (sketch_opt_t * sketch_opt_val);
-
+extern uint32_t get_sketching_id(uint32_t hclen, uint32_t holen,uint32_t iolen,uint32_t drfold,uint32_t FILTER);
+*/
 #endif

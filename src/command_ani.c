@@ -2,6 +2,7 @@
 #include "command_matrix.h"
 #include "global_basic.h"
 #include "kssdlib_sort.h"
+#include "sketch_rearrange.h"
 #include <assert.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -22,111 +23,103 @@
 #define CONFLICT_OBJ UINT32_MAX
 //pulic vars
 const char gid_obj_prefix[] = "gidobj", ctx_idx_prefix[] = "ctx.index";
-uint64_t ho_mask_len, hc_mask_len, io_mask_len, ho_mask_left,hc_mask_left, io_mask, hc_mask_right, ho_mask_right,ctxmask;
-int iolen, klen,hclen,holen ; uint32_t gid_mask; bitslen_t Bitslen; // context, gid, and obj bits len
+extern const char sorted_comb_ctxgid64obj32[];
+size_t file_size;
+/*
+int compute_ani(ani_opt_t *ani_opt){
+	//initialize 
+	dim_sketch_stat_t *dim_sketch_stat = read_from_file(test_get_fullpath(ani_opt->refdir, sketch_stat),&file_size);
+	const_comask_init(dim_sketch_stat);
+	// read index
+	uint64_t *sketch_index = read_from_file(test_get_fullpath(ani_opt->refdir,idx_sketch_suffix),&file_size);	
+	assert(file_size == (dim_sketch_stat->infile_num + 1)*sizeof(sketch_index[0]));
+	size_t ref_sketch_size = sketch_index[dim_sketch_stat->infile_num];
+	ctxgidobj_t *sortedcomb_ctxgid64obj32 = read_from_file(test_get_fullpath(ani_opt->refdir, sorted_comb_ctxgid64obj32),&file_size); 
+	assert(file_size == ref_sketch_size * sizeof(sortedcomb_ctxgid64obj32[0]) );
 
-KHASH_MAP_INIT_INT64(u64, uint32_t)
-int compute_ani(ani_opt_t *ani_opt){ //ref is the sketch(es) to be hashed.
 
-	gen_inverted_index4comblco(ani_opt->refdir);	
+	unify_sketch_t* result = generic_sketch_parse(ani_opt->refdir);
+	const_comask_init(&result->stats.lco_stat_val);
 
+	ctxgidobj_t * sortedcomb_ctxgid64obj32 =  comb_sortedsketch64_2sortedcomb_ctxgid64obj32(result);
+printf("FLG3:%lu\n",time(NULL) - second);
+	uint64_t sketch_size = result->sketch_index[result->infile_num];
+	sort_sketch_summary_t *sort_sketch_summary = summarize_ctxgidobj_arr(sortedcomb_ctxgid64obj32, result->sketch_index, sketch_size, result->infile_num);
+printf("FLG4:%lu\n",time(NULL) - second);
+    sorted_ctxgidobj_arrXcomb_sortedsketch64 ( result, sortedcomb_ctxgid64obj32, sort_sketch_summary );
+ printf("FLG5:%lu\n",time(NULL) - second);
 }
+*/
 
-void check_comb_sortedsketch64 ( unify_sketch_t* result);
-void gen_inverted_index4comblco(const char *refdir) {
+#define MCTX(L, X, Y)  (ctx[(size_t)((L)*(X) + (Y))])
+#define MOBJ(L, X, Y)  (obj[(size_t)((L)*(X) + (Y))])
+inline void count_ctx_obj_frm_comb_sketch_section(uint32_t *ctx,uint32_t *obj, ctxgidobj_t *ctxgidobj_arr, size_t ref_sksize, int ref_gnum, int section_gnum, uint64_t *section_sk, uint64_t *section_skidx, int nthreads){
+uint64_t gidmask = UINT64_MAX >> (64-GID_NBITS);
+uint64_t objmask = (1UL << Bitslen.obj) - 1;
+#pragma omp parallel for  num_threads(nthreads) schedule(guided)
+    for (int i = 0 ; i < section_gnum; i++){
+        uint64_t *a = section_sk + (section_skidx[i] - section_skidx[0]);
+        size_t a_size = section_skidx[i+1] - section_skidx[i];
+        size_t* idx = find_first_occurrences_AT_ctxgidobj_arr (a, a_size, ctxgidobj_arr, ref_sksize);
 
-	time_t seconds = time(NULL) ;
-	unify_sketch_t* ref_result = generic_sketch_parse(refdir);
-	const_comask_init(&ref_result->stats.lco_stat_val);
-	uint64_t sketch_size = ref_result->sketch_index[ref_result->infile_num] ; 
-    if (sketch_size > (float) UINT32_MAX * LD_FCTR ) err(EXIT_FAILURE,"%s():sketch_index maximun %lu exceed UINT32_MAX*LF;%f",__func__, sketch_size,(float) UINT32_MAX * LD_FCTR);
-	if( ref_result->infile_num >= ( 1<<GID_NBITS )) err(EXIT_FAILURE,"%s(): genome numer %d exceed maximum:%u",__func__,ref_result->infile_num,1<<GID_NBITS);
-	if(GID_NBITS + 4*hclen >64) err(EXIT_FAILURE,"%s(): context_bits_len(%d)+gid_bits_len(%d) exceed 64",__func__,4*hclen,GID_NBITS);
-	printf("time1=%ld\n", time(NULL) - seconds );//	check_comb_sortedsketch64 ( ref_result);
-	comb_sortedsketch64Xcomb_sortedsketch64 ( ref_result, ref_result );
-  printf("time2=%ld\n", time(NULL) - seconds );
-	ctxgidobj_t *ctxgidobj_arr = ctxobj64_2ctxgidobj(ref_result->sketch_index, ref_result->comb_sketch, ref_result->infile_num, sketch_size, klen,hclen,holen);
-  printf("time3=%ld\n", time(NULL) - seconds );
-	ctxgidobj_sort_array(ctxgidobj_arr, sketch_size) ; 
-  printf("time4=%ld\n", time(NULL) - seconds );
-	sort_sketch_summary_t *sort_sketch_summary = summarize_ctxgidobj_arr(ctxgidobj_arr, ref_result->sketch_index, sketch_size, ref_result->infile_num);
-  printf("time5=%ld\n", time(NULL) - seconds );
-  sorted_ctxgidobj_arrXcomb_sortedsketch64 ( ref_result, ctxgidobj_arr, sort_sketch_summary );
-printf("time6=%ld\n", time(NULL) - seconds );
-	free_sort_sketch_summary(sort_sketch_summary);
-  free_unify_sketch(ref_result);	
-	free(ctxgidobj_arr);
-}
+        for(int j = 0; j< a_size; j++ ){
+            if(idx[j]==SIZE_MAX) continue;
+                //skip conlict object;
+                if ((j >0) && ( (a[j] >> Bitslen.obj) == (a[j-1] >> Bitslen.obj) ) ) continue;
+                if ( (j < a_size -1 ) && ( (a[j] >> Bitslen.obj) == (a[j+1] >> Bitslen.obj) ) ) continue;
 
-void const_comask_init(dim_sketch_stat_t *lco_stat_val ){
-//	init all public vars ;
-	klen =  lco_stat_val->klen;
-	holen = lco_stat_val->holen;
-	hclen = lco_stat_val->hclen; 
-	iolen = klen - 2*(hclen + holen);
- 
-  Bitslen.ctx = 4*hclen;
-	Bitslen.gid = GID_NBITS;
-	Bitslen.obj = 2*klen-4*hclen ;
-
-	ho_mask_len = holen == 0? 0: UINT64_MAX >> (64 - 2*holen);
-  hc_mask_len = hclen == 0? 0: UINT64_MAX >> (64 - 2*hclen) ;
-  io_mask_len = iolen == 0? 0: UINT64_MAX >> (64 - 2*iolen) ; //UINT64_MAX >> 64 is undefined  not 0
-
-  ho_mask_left = ho_mask_len << (2*(klen-holen));//(2*(holen + hclen + iolen + hclen));
-  hc_mask_left = hc_mask_len << (2*(holen + hclen + iolen));//2*(holen + hclen + iolen));
-  io_mask = io_mask_len << (2*(holen + hclen));
-  hc_mask_right = hc_mask_len << (2*holen);
-  ho_mask_right = ho_mask_len;
-	
-  ctxmask = hc_mask_left | hc_mask_right ;
-  gid_mask = (1U<< GID_NBITS) - 1 ;
-}
-
-
-
-void sketch64_2ctxobj64 (uint64_t *sketch_index, uint64_t *sketch64, int infile_num,  uint32_t arrlen, int klen, int hclen, int holen ){
-#pragma omp parallel for num_threads(32) schedule(guided)
-        for (uint32_t ri = 0; ri< arrlen; ri++) {
-            sketch64[ri] = ((sketch64[ri] & hc_mask_left) << 2*holen) |
-                    	 ((sketch64[ri] & hc_mask_right) << 2*(holen + iolen)  )         |
-                    	  ((sketch64[ri] & ho_mask_left) >> 4*hclen ) | 
-						((sketch64[ri] & ho_mask_right) << (2*iolen) )|
-						((sketch64[ri] & io_mask) >> (2*(holen + hclen ))) ;
-
+                for(int d = idx[j];  ; d++){
+                    if ((ctxgidobj_arr[d].ctxgid >> Bitslen.gid) != (a[j] >> Bitslen.obj)) break;
+					uint32_t gid = ctxgidobj_arr[d].ctxgid & gidmask; MCTX(ref_gnum, i, gid)++;
+                    if((a[j] & objmask) != ctxgidobj_arr[d].obj) MOBJ(ref_gnum, i, gid)++;
+                }
         }
-   
+        free(idx);
+    }
 }
 
-uint96_t * sketch64_2uint96co(uint64_t *sketch_index, uint64_t *sketch64, int infile_num,  uint32_t arrlen, int klen, int hclen, int holen ){
-//	int iolen = klen - 2*(hclen + holen);
-	uint96_t *uint96co =  malloc( arrlen * sizeof(uint96_t)) ;
-#pragma omp parallel for num_threads(32) schedule(guided)
-	for( uint32_t rn = 0; rn < infile_num; rn++){
-        for (uint32_t ri = sketch_index[rn]; ri< sketch_index[rn+1]; ri++) {
-			uint64_t kmer = sketch64[ri];	tmp_ctxgidobj_t tmp_ctxgidobj;	
-			tmp_ctxgidobj.obj = ((kmer & ho_mask_left) >> 4*hclen ) | ((kmer & ho_mask_right) << (2*iolen) )|((kmer & io_mask) >> (2*(holen + hclen )))  ; //obj , lowest 
-			tmp_ctxgidobj.gid = rn;
-			tmp_ctxgidobj.ctx = ((kmer & hc_mask_left) >> 2*(holen  + iolen) ) | ((kmer & hc_mask_right) >> (2*holen));
-			uint96co[ri] = concat_lower_bits(&tmp_ctxgidobj, Bitslen);
+
+
+#define DIFF_OBJ_BITS 1
+size_t dedup_with_ctxobj_counts(uint32_t *arr, size_t n, co_distance_t **ctxobj_cnt) {
+    *ctxobj_cnt = NULL;
+    if (n == 0) return 0;
+
+    co_distance_t *tmp_ctxobj_cnt = malloc(n * sizeof(co_distance_t));
+    if (!tmp_ctxobj_cnt) err(EXIT_FAILURE,"%s(): tmp_ctxobj_cnt malloc failure",__func__); 
+    
+    size_t j = 0;
+    tmp_ctxobj_cnt[0].ctx_ct = 1;
+    tmp_ctxobj_cnt[0].diff_obj = arr[0] % 2;
+    arr[0] >>= DIFF_OBJ_BITS;
+
+    for (size_t i = 1; i < n; i++) {
+        if ((arr[i] >> DIFF_OBJ_BITS) == arr[j]) {
+            tmp_ctxobj_cnt[j].ctx_ct++;
+            tmp_ctxobj_cnt[j].diff_obj += (arr[i] % 2);
+        } else {
+            j++;
+            tmp_ctxobj_cnt[j].ctx_ct = 1;
+            tmp_ctxobj_cnt[j].diff_obj = arr[i] % 2;
+            arr[j] = arr[i] >> DIFF_OBJ_BITS;
         }
     }
-	return uint96co;
+    // Trim arrays
+    co_distance_t *ctxobj_tmp = realloc(tmp_ctxobj_cnt, (j + 1) * sizeof(co_distance_t));
+    *ctxobj_cnt = ctxobj_tmp ? ctxobj_tmp : tmp_ctxobj_cnt;
+    
+    return j + 1;
 }
 
-
-ctxgidobj_t* ctxobj64_2ctxgidobj(uint64_t *sketch_index, uint64_t *ctxobj64, int infile_num,  uint32_t arrlen, int klen, int hclen, int holen ){
-	ctxgidobj_t* ctxgidobj = malloc( arrlen * sizeof(ctxgidobj_t));
-	uint64_t obj_len_mask = (1LU<< 2*( 2*holen + iolen)) - 1; 
-#pragma omp parallel for num_threads(32) schedule(guided)
-	for( uint32_t rn = 0; rn < infile_num; rn++){
-		for (uint32_t ri = sketch_index[rn]; ri< sketch_index[rn+1]; ri++) {
-			ctxgidobj[ri].ctxgid = (ctxobj64[ri]  >> 2*( 2*holen + iolen) << GID_NBITS) | (rn & gid_mask );
-			ctxgidobj[ri].obj = ctxobj64[ri] & obj_len_mask ;
-			
-		}
-	}	
-	return ctxgidobj;
+ctxgidobj_t * comb_sortedsketch64_2sortedcomb_ctxgid64obj32(unify_sketch_t* ref_result){
+	//const_comask_init(&ref_result->stats.lco_stat_val);
+	uint64_t sketch_size = ref_result->sketch_index[ref_result->infile_num] ;
+    if (sketch_size > (float) UINT32_MAX * LD_FCTR ) err(EXIT_FAILURE,"%s():sketch_index maximun %lu exceed UINT32_MAX*LF;%f",__func__, sketch_size,(float) UINT32_MAX * LD_FCTR);
+    if( ref_result->infile_num >= ( 1<<GID_NBITS )) err(EXIT_FAILURE,"%s(): genome numer %d exceed maximum:%u",__func__,ref_result->infile_num,1<<GID_NBITS);
+    if(GID_NBITS + 4*hclen >64) err(EXIT_FAILURE,"%s(): context_bits_len(%d)+gid_bits_len(%d) exceed 64",__func__,4*hclen,GID_NBITS);
+	ctxgidobj_t *ctxgidobj_arr = ctxobj64_2ctxgidobj(ref_result->sketch_index, ref_result->comb_sketch, ref_result->infile_num, sketch_size, klen,hclen,holen);
+	ctxgidobj_sort_array(ctxgidobj_arr, sketch_size) ;
+	return ctxgidobj_arr;		
 }
 
 
@@ -165,7 +158,6 @@ void free_sort_sketch_summary(sort_sketch_summary_t * sort_sketch_summary){
 	free(sort_sketch_summary);
 }
 
-#include <assert.h>
 #define CTX(X, Y)  (ctx[(size_t)(((X)*((X)+1))/2 + (Y))])
 #define OBJ(X, Y)  (obj[(size_t)(((X)*((X)+1))/2 + (Y))])
 
@@ -213,6 +205,217 @@ printf("flg6:OK\n");
 printf("flg7:OK\n");
 		
 }
+
+#define BLOCK_SIZE (4096) // #of qry genomes per batch, for mem_eff handling 
+int mem_eff_sorted_ctxgidobj_arrXcomb_sortedsketch64(ani_opt_t *ani_opt){
+    dim_sketch_stat_t *ref_dim_sketch_stat = read_from_file(test_get_fullpath(ani_opt->refdir, sketch_stat),&file_size);
+	int ref_infile_num = ref_dim_sketch_stat->infile_num;
+    // read index
+	size_t ctxgidobj_arr_fsize;
+    uint64_t *ref_sketch_index = read_from_file(test_get_fullpath(ani_opt->refdir,idx_sketch_suffix),&file_size);
+    assert(file_size == (ref_infile_num + 1)*sizeof(ref_sketch_index[0]));
+    size_t ref_sketch_size = ref_sketch_index[ref_infile_num];
+    ctxgidobj_t * sortedcomb_ctxgid64obj32 = read_from_file(test_get_fullpath(ani_opt->refdir, sorted_comb_ctxgid64obj32),&ctxgidobj_arr_fsize);
+    assert(ctxgidobj_arr_fsize == ref_sketch_size * sizeof(sortedcomb_ctxgid64obj32[0]) );
+
+	dim_sketch_stat_t *qry_dim_sketch_stat = read_from_file(test_get_fullpath(ani_opt->qrydir, sketch_stat),&file_size);	
+	int qry_infile_num = qry_dim_sketch_stat->infile_num;
+	assert(qry_dim_sketch_stat->hash_id == ref_dim_sketch_stat->hash_id);
+	uint64_t *qry_sketch_index = read_from_file(test_get_fullpath(ani_opt->qrydir,idx_sketch_suffix),&file_size);
+	size_t qry_sketch_size = qry_sketch_index[qry_infile_num];
+
+	int block_size = BLOCK_SIZE; int offset_gid = 0 ;FILE *fp;
+	assert( (fp = fopen(test_get_fullpath(ani_opt->qrydir,combined_sketch_suffix),"rb") ) != NULL) ;
+	uint64_t *tmp_ctxobj = malloc(qry_sketch_size * sizeof(uint64_t)); 	
+	uint32_t *ctx = malloc( ref_infile_num * block_size * sizeof(uint32_t))  ;
+	uint32_t *obj = malloc( ref_infile_num * block_size * sizeof(uint32_t))  ;
+	
+	char (*refname)[PATHLEN] = (char (*)[PATHLEN])(ref_dim_sketch_stat + 1);
+	char (*qryname)[PATHLEN] = (char (*)[PATHLEN])(qry_dim_sketch_stat + 1);
+
+//printf("%s\n",refname[0]); return 1;
+	FILE *outfp = ani_opt->outf[0]=='\0' ? stdout: fopen( ani_opt->outf, "w");
+
+	for( int b = 0; b <= qry_infile_num/block_size ; b++){
+
+		int this_block_size = (b == qry_infile_num/block_size) ? (qry_infile_num % block_size):block_size;					
+		int this_sketch_size = qry_sketch_index[offset_gid + this_block_size] - qry_sketch_index[offset_gid];
+		int read_sketch_size = fread(tmp_ctxobj, sizeof(uint64_t),this_sketch_size,fp);
+		uint64_t *this_sketch_index = qry_sketch_index + offset_gid;
+		assert(this_sketch_size == read_sketch_size);
+
+        memset(ctx,0,ref_infile_num * block_size * sizeof(uint32_t));
+        memset(obj,0,ref_infile_num * block_size * sizeof(uint32_t));
+		count_ctx_obj_frm_comb_sketch_section(ctx,obj,sortedcomb_ctxgid64obj32, ref_sketch_size, ref_infile_num, this_block_size, tmp_ctxobj, this_sketch_index, ani_opt->p);	
+		ani_block_print(ref_infile_num, b*block_size,this_block_size,ref_sketch_index,qry_sketch_index,ctx,obj, refname,qryname,outfp,ani_opt->afcut,ani_opt->anicut);
+
+		offset_gid+=this_block_size;
+	}	
+	free_all(ref_dim_sketch_stat,ref_sketch_index,qry_dim_sketch_stat,qry_sketch_index,tmp_ctxobj,ctx,obj,NULL);
+	free_read_from_file(sortedcomb_ctxgid64obj32,ctxgidobj_arr_fsize);
+	fclose(fp); fclose(outfp);
+	return ctxgidobj_arr_fsize;
+}
+
+void ani_block_print(int ref_infile_num, int qry_gid_offset, int this_block_size, uint64_t *ref_sketch_index, uint64_t *qry_sketch_index, uint32_t *ctx, uint32_t *obj,char (*refname)[PATHLEN], char (*qryfname)[PATHLEN], FILE *outfp, float af_cutoff, float ani_cutoff ){
+	
+	for(int i=0; i< this_block_size; i++){
+		int qry_gid = qry_gid_offset + i;
+		int qry_sketch_size = qry_sketch_index[qry_gid+1] - qry_sketch_index[qry_gid];
+//printf("%d\t%d\t%d\t%f\n",qry_gid,qry_sketch_size,MCTX(ref_infile_num,i,qry_gid),(float)MCTX(ref_infile_num,i,qry_gid) / qry_sketch_size);	
+		for(int j = qry_gid; j< qry_gid+1;j++){
+//printf("%f\t",(float)MCTX(ref_infile_num,i,j));
+			float af_qry = (float)MCTX(ref_infile_num,i,j) / qry_sketch_size ;
+			if(af_qry <  0.1) break;
+//printf("%f\n",af_qry);
+			int ref_sketch_size = ref_sketch_index[j+1] - ref_sketch_index[j];	
+			float af_ref = (float)MCTX(ref_infile_num,i,j) / ref_sketch_size ;
+			double dist = (double)MOBJ(ref_infile_num,i,j)/MCTX(ref_infile_num,i,j);
+			double ani = pow((1-dist), (double)1/(2*holen)) * 100; 
+//			if (ani < ani_cutoff)  break;
+			fprintf(outfp,"%s\t%s\t%d\t%f\t%f\t%lf\t%lf\n",qryfname[qry_gid],refname[j], MCTX(ref_infile_num,i,j),af_qry,af_ref,dist,ani);
+		}
+	}
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// sparse_mem_eff.. seems slower than mem_eff,
+int sparse_mem_eff_sorted_ctxgidobj_arrXcomb_sortedsketch64(ani_opt_t *ani_opt){
+    //initialize
+    dim_sketch_stat_t *ref_dim_sketch_stat = read_from_file(test_get_fullpath(ani_opt->refdir, sketch_stat),&file_size);
+    const_comask_init(ref_dim_sketch_stat);
+
+	uint64_t gidmask = UINT64_MAX >> (64-GID_NBITS);
+	uint64_t objmask = (1UL << Bitslen.obj) - 1;
+ 
+	int ref_infile_num = ref_dim_sketch_stat->infile_num;
+    // read index
+    size_t ctxgidobj_arr_fsize;
+    uint64_t *ref_sketch_index = read_from_file(test_get_fullpath(ani_opt->refdir,idx_sketch_suffix),&file_size);
+    assert(file_size == (ref_infile_num + 1)*sizeof(ref_sketch_index[0]));
+    size_t ref_sketch_size = ref_sketch_index[ref_infile_num];
+    ctxgidobj_t * sortedcomb_ctxgid64obj32 = read_from_file(test_get_fullpath(ani_opt->refdir, sorted_comb_ctxgid64obj32),&ctxgidobj_arr_fsize);
+    assert(ctxgidobj_arr_fsize == ref_sketch_size * sizeof(sortedcomb_ctxgid64obj32[0]) );
+
+    dim_sketch_stat_t *qry_dim_sketch_stat = read_from_file(test_get_fullpath(ani_opt->qrydir, sketch_stat),&file_size);
+    int qry_infile_num = qry_dim_sketch_stat->infile_num;
+    assert(qry_dim_sketch_stat->hash_id == ref_dim_sketch_stat->hash_id);
+    uint64_t *qry_sketch_index = read_from_file(test_get_fullpath(ani_opt->qrydir,idx_sketch_suffix),&file_size);
+    size_t qry_sketch_size = qry_sketch_index[qry_infile_num];
+
+    int block_size = BLOCK_SIZE; int offset_gid = 0 ;FILE *fp;
+    assert( (fp = fopen(test_get_fullpath(ani_opt->qrydir,combined_sketch_suffix),"rb") ) != NULL) ;
+    uint64_t *tmp_ctxobj = malloc(qry_sketch_size * sizeof(uint64_t));
+	// arry of dynamic gids array per query, note gid <<= DIFF_OBJ_BITS + (ref_obj==qry_obj?0:1);  >>sparse only
+//    Vector *ref_gids_perqry_arr  = malloc( block_size * sizeof(Vector));
+	//ref_gids_perqry_arr[i][0] is capacity, ref_gids_perqry_arr[i][1] is length of the inner array 
+	uint32_t **ref_gids_perqry_arr = malloc( block_size * sizeof(uint32_t *)); 
+	co_distance_t ** ctxobj_cnt_perqry_arr = malloc( block_size * sizeof(co_distance_t *)); 
+	size_t *lens  = malloc( block_size * sizeof(size_t)) ;     
+	for(int i =0 ; i< block_size; i++) {
+		ref_gids_perqry_arr[i] = malloc( 6 * sizeof(uint32_t)) ; // 4 for innitialized capacity
+		ref_gids_perqry_arr[i][0] = 4;
+		ref_gids_perqry_arr[i][1] = 0;
+	}
+	
+    for( int b = 0; b <= qry_infile_num/block_size ; b++){
+
+        int this_block_size = (b == qry_infile_num/block_size) ? (qry_infile_num % block_size):block_size;
+        int this_sketch_size = qry_sketch_index[offset_gid + this_block_size] - qry_sketch_index[offset_gid];
+        int read_sketch_size = fread(tmp_ctxobj, sizeof(uint64_t),this_sketch_size,fp);
+        uint64_t *this_sketch_index = qry_sketch_index + offset_gid;
+        assert(this_sketch_size == read_sketch_size);
+
+#pragma omp parallel for  num_threads(ani_opt->p) schedule(guided)
+    	for (int i = 0 ; i < this_block_size; i++){
+        	uint64_t *a = tmp_ctxobj + (this_sketch_index[i] - this_sketch_index[0]);
+        	size_t a_size = this_sketch_index[i+1] - this_sketch_index[i];
+        	size_t* idx = find_first_occurrences_AT_ctxgidobj_arr (a, a_size, sortedcomb_ctxgid64obj32, ref_sketch_size);
+
+        	for(int j = 0; j< a_size; j++ ){
+            	if(idx[j]==SIZE_MAX) continue;
+                //skip conlict object;
+                	if ((j >0) && ( (a[j] >> Bitslen.obj) == (a[j-1] >> Bitslen.obj) ) ) continue;
+                	if ( (j < a_size -1 ) && ( (a[j] >> Bitslen.obj) == (a[j+1] >> Bitslen.obj) ) ) continue;
+
+	                for(int d = idx[j];  ; d++){
+                    	if ((sortedcomb_ctxgid64obj32[d].ctxgid >> Bitslen.gid) != (a[j] >> Bitslen.obj)) break;
+                    	uint32_t gid01 = sortedcomb_ctxgid64obj32[d].ctxgid & gidmask <<  DIFF_OBJ_BITS;
+						if((a[j] & objmask) != sortedcomb_ctxgid64obj32[d].obj) gid01 |= 1;
+						if(ref_gids_perqry_arr[i][1] + 2 == ref_gids_perqry_arr[i][0] ){
+							ref_gids_perqry_arr[i][0] += 100 ;
+							ref_gids_perqry_arr[i] = realloc(ref_gids_perqry_arr[i],ref_gids_perqry_arr[i][0] * sizeof(ref_gids_perqry_arr[i][0]));
+						}
+						ref_gids_perqry_arr[i][2 + ref_gids_perqry_arr[i][1] ] = gid01;
+						ref_gids_perqry_arr[i][1]++;
+						//vector_push(&ref_gids_perqry_arr[i],&gid01);						
+                	}
+        	}
+	        free(idx);
+			qsort(ref_gids_perqry_arr[i]+2, ref_gids_perqry_arr[i][1], sizeof(uint32_t), qsort_comparator_uint32);
+			lens[i] = dedup_with_ctxobj_counts( ref_gids_perqry_arr[i]+2, ref_gids_perqry_arr[i][1], &ctxobj_cnt_perqry_arr[i]);       	 
+    	}
+
+        for ( int i = 0 ; i< this_block_size; i++ ){
+            int qry_gid = b*block_size+i;
+            int qry_sketch_size = ref_sketch_index[qry_gid+1] - ref_sketch_index[qry_gid];
+//sparse only code >>
+            for (int l=0;l< lens[i]; l++){
+				double dist = ctxobj_cnt_perqry_arr[i][l].diff_obj/ctxobj_cnt_perqry_arr[i][l].ctx_ct;
+				double ani = pow((1-dist), (double)1/(2*holen));
+#define VEC_GET_AS(type, vec, idx) (((type*)(vec).data)[idx])
+	//			if(ctxobj_cnt_perqry_arr[i][l].ctx_ct > 20)
+      //          	printf ("%d|%d|%d|%d|%d|%lf|%lf\t",qry_gid,VEC_GET_AS(uint32_t, ref_gids_perqry_arr[i], l),qry_sketch_size,ctxobj_cnt_perqry_arr[i][l].ctx_ct,ctxobj_cnt_perqry_arr[i][l].diff_obj,dist,ani);
+            }
+    //        printf("\n");
+//<<  
+
+        }
+	//	for(int i =0 ; i< this_block_size; i++) vector_free(&ref_gids_perqry_arr[i]);//ref_gids_perqry_arr[i].size = 0;
+#pragma omp parallel for  num_threads(ani_opt->p) schedule(guided)
+  		for(int i =0 ; i< this_block_size; i++) {
+        	ref_gids_perqry_arr[i][1] = 0 ;
+//			ref_gids_perqry_arr[i][0] = 4;
+        	free(ctxobj_cnt_perqry_arr[i]);
+    	}
+	    offset_gid+=this_block_size;
+    }// all blocks loop end
+
+	for(int i = 0; i< block_size; i++) free(ref_gids_perqry_arr[i]);
+	free_all(ref_gids_perqry_arr,ctxobj_cnt_perqry_arr,NULL);////sparse only code >>
+    free_all(ref_dim_sketch_stat,ref_sketch_index,qry_dim_sketch_stat,qry_sketch_index,tmp_ctxobj,NULL);
+    free_read_from_file(sortedcomb_ctxgid64obj32,ctxgidobj_arr_fsize);
+    fclose(fp);
+
+    return ctxgidobj_arr_fsize;
+}
+
+
+
 //2. inverted index(i.e. global sorted_ctxgidobj_arr) X common index(i.e. genome-wise sorted comb_sortedsketch64 ) :
 // ** the fatest method when dist matrix is sparse
 void sorted_ctxgidobj_arrXcomb_sortedsketch64 ( unify_sketch_t* qry_result, ctxgidobj_t* ctxgidobj_arr, sort_sketch_summary_t *sort_sketch_summary ){
@@ -231,31 +434,47 @@ void sorted_ctxgidobj_arrXcomb_sortedsketch64 ( unify_sketch_t* qry_result, ctxg
     uint16_t *ctx = calloc( (size_t)ref_infile_num*(ref_infile_num+1)/2 , sizeof(uint16_t));
     uint16_t *obj = calloc( (size_t)ref_infile_num*(ref_infile_num+1)/2 , sizeof(uint16_t));
 #pragma omp parallel for num_threads(32) schedule(guided)
-	for( uint32_t rn = 0; rn < qry_infile_num; rn++){
+	for( uint32_t rn = 0; rn < qry_infile_num; rn++){ 
 //		if(rn > 0) break;
-		const uint64_t *a = qry_comb_sketch + qry_sketch_index[rn]; 
+		uint64_t *a = qry_comb_sketch + qry_sketch_index[rn]; 
 		size_t a_size = qry_sketch_index[rn+1] - qry_sketch_index[rn];		
 		size_t* idx = find_first_occurrences_AT_ctxgidobj_arr (a, a_size, ctxgidobj_arr , ref_arrlen);
       for(int i = 0; i< a_size; i++ ){
-			  if(idx[i]==SIZE_MAX) continue;
+			if(idx[i]==SIZE_MAX) continue;
+			//skip conlict object;
+			if ((i >0) && ( (a[i] >> Bitslen.obj) == (a[i-1] >> Bitslen.obj) ) ) continue;
+            if ( (i < a_size -1 ) && ( (a[i] >> Bitslen.obj) == (a[i+1] >> Bitslen.obj) ) ) continue;
+
 			for(int d = idx[i];  ; d++){			
 				uint32_t gid = ctxgidobj_arr[d].ctxgid & gidmask;
-				if (gid >= rn || (ctxgidobj_arr[d].ctxgid >> Bitslen.gid) != (a[i] >> Bitslen.obj)) break;
+				if (gid > rn || (ctxgidobj_arr[d].ctxgid >> Bitslen.gid) != (a[i] >> Bitslen.obj)) break;
 				CTX(rn, gid)++;
-				if(a[i] & objmask != ctxgidobj_arr[d].obj) OBJ(rn,gid)++;
+				if((a[i] & objmask) != ctxgidobj_arr[d].obj) //wrong: if(a[i] & objmask != ctxgidobj_arr[d].obj) ...
+					OBJ(rn,gid)++;
+				
 			}			
 		}				
 	   free(idx);
+/*
+#pragma omp critical 
+		{
+	     	for(int i = 0 ; i <= rn;i++){
+            	if( CTX(rn,i) > 0 ) printf("\t%d|%d|%d|%d|%f",i,rn, CTX(rn,i),OBJ(rn,i),(float) OBJ(rn,i)/CTX(rn, i));
+        	}
+			printf("\n");
+		}
+*/
    }	
 
-/*
+
    for( uint32_t rn = 0; rn < qry_infile_num; rn++){
+		printf("%u",rn);
         for(int i = 0 ; i < rn;i++){
             if( CTX(rn,i) > 0 ) printf("\t%d|%d|%d|%f",i, CTX(rn,i),OBJ(rn,i),(float) OBJ(rn,i)/CTX(rn, i));
         }
         printf("\n");
 	}
-*/
+
 }//end
 
 //3. common index X common index (i.e. genome-wise sorted comb_sortedsketch64 ):
@@ -301,14 +520,6 @@ void check_comb_sortedsketch64 ( unify_sketch_t* result){
 
 
 
-
-
-
-
-
-
-
-
 //
 
 /**
@@ -329,7 +540,7 @@ size_t* find_first_occurrences_AT_ctxgidobj_arr (const uint64_t *a, size_t a_siz
     size_t low = 0;  // Track lower bound for binary search
     
     for (size_t i = 0; i < a_size; ++i) {
-		const uint64_t target = a[i]  >> (2*(2*holen + iolen ));
+		const uint64_t target = a[i]  >> Bitslen.obj; // (2*(2*holen + iolen ));
 
         size_t high = b_size;
         size_t pos = SIZE_MAX;  // Default: not found

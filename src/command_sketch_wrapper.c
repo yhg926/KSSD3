@@ -1,4 +1,5 @@
 #include "command_sketch_wrapper.h"
+#include "sketch_rearrange.h"
 #include "global_basic.h"
 #include <stdarg.h>
 #include <stdio.h>
@@ -40,7 +41,8 @@ static struct argp_option opt_sketch[] =
 	{"list",'l',"file",0,"a file contain paths for all query sequences\v",6},
 	{"outdir",'o',"<path>",0,"folder path for results files.\v",7 },
 	{"abundance",'A',0,0,"abundance estimate mode.\v",8},
-  {"threads",'p',"<INT>", 0, "Threads number to use. [1]\v",9},
+   {"threads",'p',"<INT>", 0, "Threads number to use. [1]\v",9},
+	{"index",'i',"<FILE>", 0, "Inverted indexing of combined sketch.\v",10},
 	{"merge",777,0, 0, "merge sketches, not for genome sketching.\v",10},
 	{"splitmfa",888,0, 0, "treat mfa file as many genomes.\v",11},
   { 0 }
@@ -64,6 +66,7 @@ sketch_opt_t sketch_opt = {
 	.split_mfa = 0,
 //  .fpath[0] ='\0',
   .outdir = "./",
+	.index[0] = '\0',
 //	.pipecmd[0] = '\0', // no pipe command
   .num_remaining_args = 0, //int num_remaining_args; no option arguments num.
   .remaining_args = NULL //char **remaining_args; no option arguments array.
@@ -123,6 +126,11 @@ static error_t parse_sketch(int key, char* arg, struct argp_state* state) {
       sketch_opt.kmerocrs = val;
       break;
     }
+	case 'i':
+	{
+		strcpy(sketch_opt.index, arg);
+        break;
+ 	}
     case 'p':
     {
 #ifdef _OPENMP
@@ -179,7 +187,7 @@ static error_t parse_sketch(int key, char* arg, struct argp_state* state) {
 				printf("\nError: k-mer length %d should smaller than 32 \n\n", klen);
 				exit(1) ;
 			}
-      if(sketch_opt.fpath == NULL && sketch_opt.num_remaining_args == 0){
+      if(sketch_opt.index[0]=='\0' && sketch_opt.fpath == NULL && sketch_opt.num_remaining_args == 0){
         printf("\nError: missing input sequences file \n\n");
         argp_state_help(state, stdout, ARGP_HELP_STD_HELP);
         argp_usage(state);
@@ -223,7 +231,13 @@ infile_tab_t* sketch_organize_infiles(sketch_opt_t * sketch_opt_val)
   }
 };
 
-
+extern uint32_t FILTER; //control dimensionality reducation level
+extern uint32_t hash_id;
+extern dim_sketch_stat_t comblco_stat_one;
+extern void compute_sketch(sketch_opt_t*, infile_tab_t*);
+extern void gen_inverted_index4comblco(const char* sketchdir);
+extern int merge_comblco (sketch_opt_t * sketch_opt_val);
+extern uint32_t get_sketching_id(uint32_t hclen, uint32_t holen,uint32_t iolen,uint32_t drfold,uint32_t FILTER);
 
 int cmd_sketch(struct argp_state* state)
 {
@@ -237,9 +251,33 @@ int cmd_sketch(struct argp_state* state)
 	if(sketch_opt.merge_comblco){
 		int merge_count= merge_comblco(&sketch_opt);
 	}
+	else if(sketch_opt.index[0]!='\0'){
+		gen_inverted_index4comblco(sketch_opt.index);
+	}
 	else{
 		infile_tab_t* infile_stat = sketch_organize_infiles(&sketch_opt);
-		if(infile_stat->infile_num) compute_sketch(&sketch_opt, infile_stat);
+		if(infile_stat->infile_num) {
+   		  	FILTER = UINT32_MAX >> sketch_opt.drfold  ;
+        	hash_id  =  get_sketching_id(sketch_opt.hclen, sketch_opt.holen, sketch_opt.iolen, sketch_opt.drfold , FILTER);
+     		klen = 2*(sketch_opt.hclen + sketch_opt.holen) + sketch_opt.iolen;
+     		if ( klen > 32 || FILTER < 256) err(EINVAL,"%s(): klen (%d) or FILTER (%u) is out of range (klen <=32 and FILTER: 256..0xffffffff)",__func__,klen, FILTER);
+   
+   		printf("Sketching method hashid = %u\tklen=%u\tFILTER=%u\thclen=%d\n",hash_id,klen,FILTER,sketch_opt.hclen);
+			{	/*initilize comblco_stat_one*/
+			comblco_stat_one.hash_id =  hash_id;
+			comblco_stat_one.koc = sketch_opt.abundance;
+			comblco_stat_one.klen = 2*(sketch_opt.hclen + sketch_opt.holen) + sketch_opt.iolen;
+			comblco_stat_one.hclen = sketch_opt.hclen;
+			comblco_stat_one.holen = sketch_opt.holen;
+			comblco_stat_one.drfold = sketch_opt.drfold;
+			comblco_stat_one.infile_num = infile_stat->infile_num;
+			}
+			//ensure initalize global masks 
+			const_comask_init(&comblco_stat_one);
+			mkdir_p(sketch_opt.outdir);
+
+			compute_sketch(&sketch_opt, infile_stat);
+		}
 		else {
 			printf("not valid fas/fastq files!\n");
 		}

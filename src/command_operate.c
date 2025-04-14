@@ -1,5 +1,6 @@
 /*command_operate.c extent the legency kssd set functions to support long sketch (*.comblco) */
 #include "global_basic.h"
+#include "command_ani.h"
 #include "command_operate.h"
 #include "../klib/khash.h"
 #include <stdint.h>
@@ -12,7 +13,7 @@ static dim_sketch_stat_t lco_stat_readin, lco_stat_pan, lco_stat_origin ;
 static struct stat s;
 static char outfpath[PATHLEN+20];
 static int ret;
-
+extern const char sorted_comb_ctxgid64obj32[];
 void print_lco_gnames(set_opt_t* set_opt){
 	void *mem_stat = read_from_file( test_get_fullpath(set_opt->insketchpath,sketch_stat) , &file_size);
 	memcpy(&lco_stat_readin,mem_stat,sizeof(lco_stat_readin));	char (*tmpname)[PATHLEN] = mem_stat+sizeof(dim_sketch_stat_t);
@@ -22,18 +23,27 @@ void print_lco_gnames(set_opt_t* set_opt){
 }
 
 void show_content(set_opt_t* set_opt){
-	uint64_t *sketch_index = read_from_file( test_get_fullpath(set_opt->insketchpath,idx_sketch_suffix) , &file_size);
-	int infile_num = file_size/sizeof(uint64_t) - 1;	
-	uint64_t kmer; FILE *fp;
-	if((fp=fopen(test_get_fullpath(set_opt->insketchpath,combined_sketch_suffix),"rb")) == NULL) 
-		err(EXIT_FAILURE, "%s(): Failed to open file '%s/%s'", __func__, set_opt->insketchpath,combined_sketch_suffix);
-	for(int i = 0 ; i< infile_num;i++){
-		for(uint64_t j = sketch_index[i]; j < sketch_index[i+1]; j++ ){
-			fread(&kmer,sizeof(kmer),1,fp);
-			printf("%d\t%lx\n",i,kmer);
+	FILE *fp; uint64_t kmer; ctxgidobj_t ctxgidobj;
+	if(set_opt->show == 1) {
+		uint64_t *sketch_index = read_from_file( test_get_fullpath(set_opt->insketchpath,idx_sketch_suffix) , &file_size);
+		int infile_num = file_size/sizeof(uint64_t) - 1;	
+		if((fp=fopen(test_get_fullpath(set_opt->insketchpath,combined_sketch_suffix),"rb")) == NULL) 
+			err(EXIT_FAILURE, "%s(): Failed to open file '%s/%s'", __func__, set_opt->insketchpath,combined_sketch_suffix);
+		for(int i = 0 ; i< infile_num;i++){
+			for(uint64_t j = sketch_index[i]; j < sketch_index[i+1]; j++ ){
+			fread(&kmer,sizeof(kmer),1,fp); printf("%d\t%lx\n",i,kmer);
+			}
+		}
+		free(sketch_index);	
+	}
+	else if (set_opt->show == 2){
+		if((fp=fopen(test_get_fullpath(set_opt->insketchpath,sorted_comb_ctxgid64obj32),"rb")) == NULL)
+            err(EXIT_FAILURE, "%s(): Failed to open file '%s/%s'", __func__, set_opt->insketchpath,sorted_comb_ctxgid64obj32);
+		while(!feof(fp)){
+			fread(&ctxgidobj,sizeof(ctxgidobj),1,fp);  printf("%lx\t%x\n",ctxgidobj.ctxgid,ctxgidobj.obj);
 		}
 	}
-	free(sketch_index);
+	else err(EXIT_FAILURE, "%s(): only set_opt.show values 1 and 2 are supported, set_opt.show =%d", __func__, set_opt->show);
 	fclose(fp);
 }
 

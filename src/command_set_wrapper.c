@@ -20,6 +20,7 @@ static struct argp_option opt_set[] =
 	{"threads",'p',"<INT>",  0, "number of threads.\v",5 },
 	{"print",'P',0,  0, "print genome names.\v",5 },
 	{"psketch",777,0,  0, "print sketch content.\v",5 },
+	{"pindex",888,0,  0, "print ctxgidobj index content.\v",5 },
 	{"grouping",'g',"<file.tsv>",0,"grouping genomes by input category file.\v",5},
 	{"outdir",'o',"<path>",0,"specify the output directory.\v",6},
   { 0 }
@@ -126,6 +127,11 @@ static error_t parse_set(int key, char* arg, struct argp_state* state) {
 			set_opt.show = 1;
 			break;	
 		}
+		case 888:
+        {
+            set_opt.show = 2;
+            break;
+        }
 		case ARGP_KEY_ARGS:
 			strcpy(set_opt.insketchpath, state->argv[state->next]);
 			set_opt.num_remaining_args = state->argc - state->next;

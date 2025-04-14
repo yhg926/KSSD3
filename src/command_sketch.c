@@ -1,4 +1,5 @@
 #include "command_sketch.h"
+#include "sketch_rearrange.h"
 #include "kssdlib_sort.h"
 #include <time.h>
 
@@ -8,44 +9,32 @@ const char sketch_suffix[] = "lco"; // long co, 64bits
 const char combined_sketch_suffix[] = "comblco";
 const char idx_sketch_suffix[] = "comblco.index";
 const char combined_ab_suffix[] = "comblco.a";
-//public vars in this scope
-static uint32_t FILTER,hash_id;
-static uint64_t ctxmask,tupmask,ho_mask_len, hc_mask_len, io_mask_len, ho_mask_left,hc_mask_left, io_mask, hc_mask_right, ho_mask_right;
-static uint8_t iolen, klen,hclen,holen ;
+const char sorted_comb_ctxgid64obj32[] = "sortedcomb_ctxgid64obj32";
+//public vars shared across files
+uint32_t FILTER,hash_id;
+dim_sketch_stat_t comblco_stat_one,comblco_stat_it;
 //tmp container in this scope
 static size_t file_size;
-static dim_sketch_stat_t comblco_stat_one, comblco_stat_it;
 static char tmp_fname[PATHLEN+20];
 static struct stat tmpstat;
 //functions
 
-void public_vars_init(sketch_opt_t * sketch_opt_val){
-//init all public vars ;
-	hclen = sketch_opt_val->hclen;
-	holen = sketch_opt_val->holen;
-	iolen = sketch_opt_val->iolen;
-	klen = 2*(hclen + holen) + iolen;
-//basic mask
-  ho_mask_len = holen == 0? 0: UINT64_MAX >> (64 - 2*holen);
-  hc_mask_len = hclen == 0? 0: UINT64_MAX >> (64 - 2*hclen) ;
-  io_mask_len = iolen == 0? 0: UINT64_MAX >> (64 - 2*iolen) ; //UINT64_MAX >> 64 is undefined  not 0
-	tupmask = klen==0? 0: UINT64_MAX >> (64 - 2*klen);
-//put in place
-  ho_mask_left = ho_mask_len << (2*(klen-holen));//(2*(holen + hclen + iolen + hclen));
-  hc_mask_left = hc_mask_len << (2*(holen + hclen + iolen));//2*(holen + hclen + iolen));
-  io_mask = io_mask_len << (2*(holen + hclen));
-  hc_mask_right = hc_mask_len << (2*holen);
-  ho_mask_right = ho_mask_len;
-
-  ctxmask = hc_mask_left | hc_mask_right ;
-  
-  FILTER = UINT32_MAX >> sketch_opt_val->drfold  ; //2^(32-12)
-  if ( klen > 32 || FILTER < 256) err(EINVAL,"compute_sketch(): klen (%d) or FILTER (%u) is out of range (klen <=32 and FILTER: 256..0xffffffff)",klen, FILTER);
-  hash_id =  GET_SKETCHING_ID(sketch_opt_val->hclen, sketch_opt_val->holen, sketch_opt_val->iolen, sketch_opt_val->drfold , FILTER);
-  printf("Sketching method hashid = %u\tklen=%u\n", hash_id,klen);
-	mkdir_p(sketch_opt_val->outdir);
+uint32_t get_sketching_id(uint32_t hclen, uint32_t holen,uint32_t iolen,uint32_t drfold,uint32_t FILTER){
+	return  GET_SKETCHING_ID(hclen, holen, iolen, drfold, FILTER);
 }
-// core kmer rearrange to ctxobj64
+
+/*
+void public_vars_init(dim_sketch_stat_t* sketch_stat_raw){
+ 	 FILTER = UINT32_MAX >> sketch_stat_raw->drfold  ;
+     sketch_stat_raw->hash_id  =  GET_SKETCHING_ID(sketch_stat_raw->hclen, sketch_stat_raw->holen, sketch_stat_raw->iolen, sketch_stat_raw->drfold , FILTER);
+	 klen = 2*(sketch_stat_raw->hclen + sketch_stat_raw->holen) + sketch_stat_raw->iolen;  
+ 	 if ( klen > 32 || FILTER < 256) err(EINVAL,"compute_sketch(): klen (%d) or FILTER (%u) is out of range (klen <=32 and FILTER: 256..0xffffffff)",klen, FILTER);
+	 comblco_stat_one = *sketch_stat_raw ;
+     printf("Sketching method hashid = %u\tklen=%u\n", comblco_stat_one.hash_id,kcomblco_stat_one.len);
+}
+*/
+
+/* mv to sketch_rearragne.h . core kmer rearrange to ctxobj64
 static inline uint64_t uint64_kmer2ctxobj (uint64_t unituple){
 	
  return (      ((unituple & hc_mask_left) << 2*holen)            |
@@ -54,18 +43,15 @@ static inline uint64_t uint64_kmer2ctxobj (uint64_t unituple){
                ((unituple & ho_mask_right) << (2*iolen) )        |
                ((unituple & io_mask) >> (2*(holen + hclen )))    );
 }
-
-void read_genomes2mem2sortedctxobj64 (sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat, int);
+*/
 
 void compute_sketch(sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat){
-	public_vars_init( sketch_opt_val); //initilization
-	read_genomes2mem2sortedctxobj64(sketch_opt_val, infile_stat, 1000); // chunck 
-	return;
+
 	if(sketch_opt_val->split_mfa){           // mfa files parse
 		 mfa2sortedctxobj64( sketch_opt_val, infile_stat);
 		return;
 	}	
-
+	read_genomes2mem2sortedctxobj64(sketch_opt_val, infile_stat, 1000);
 //normal sketching mode 
 uint64_t * tmp_ct_list = calloc (infile_stat->infile_num + 1, sizeof(uint64_t));
 #pragma omp parallel for num_threads(sketch_opt_val->p) schedule(guided)	
@@ -88,7 +74,7 @@ uint64_t * tmp_ct_list = calloc (infile_stat->infile_num + 1, sizeof(uint64_t));
 	write_to_file(test_create_fullpath(sketch_opt_val->outdir,idx_sketch_suffix),tmp_ct_list,sizeof(tmp_ct_list[0]) * (infile_stat->infile_num + 1) );
 	free(tmp_ct_list);
 //write stat file
-	write_sketch_stat ( sketch_opt_val, infile_stat);
+	write_sketch_stat ( sketch_opt_val->outdir, infile_stat);
 };
 
 
@@ -121,22 +107,28 @@ void combine_lco( sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat){
   fclose(comb_sketch_fp); if( sketch_opt_val->abundance) fclose(comb_ab_fp);	
 }
 
+void gen_inverted_index4comblco(const char *refdir) {
 
-void write_sketch_stat (sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat){
-	  //write stat file
-  dim_sketch_stat_t dim_sketch_stat = {
-    .hash_id =  hash_id,
-    .koc = sketch_opt_val->abundance,
-    .klen = klen,
-    .hclen = sketch_opt_val->hclen,
-    .holen = sketch_opt_val->holen,
-    .drfold = sketch_opt_val->drfold, //2^12 = 4096
-    .infile_num = infile_stat->infile_num
-  };
+    unify_sketch_t* ref_result = generic_sketch_parse(refdir);
+    const_comask_init(&ref_result->stats.lco_stat_val);
+  
+	uint64_t sketch_size = ref_result->sketch_index[ref_result->infile_num] ;
+    if (sketch_size >= UINT32_MAX ) err(EXIT_FAILURE,"%s():sketch_index maximun %lu exceed UINT32_MAX %u",__func__, sketch_size, UINT32_MAX );
+    if( ref_result->infile_num >= ( 1<<GID_NBITS )) err(EXIT_FAILURE,"%s(): genome numer %d exceed maximum:%u",__func__,ref_result->infile_num,1<<GID_NBITS);
+    if(GID_NBITS + 4*hclen >64) err(EXIT_FAILURE,"%s(): context_bits_len(%d)+gid_bits_len(%d) exceed 64",__func__,4*hclen,GID_NBITS);
+	ctxgidobj_t *ctxgidobj = ctxobj64_2ctxgidobj(ref_result->sketch_index, ref_result->comb_sketch, ref_result->infile_num, sketch_size,  klen, hclen, holen );	
+	free_unify_sketch(ref_result);
+	ctxgidobj_sort_array(ctxgidobj, sketch_size);
+//printf("sketch_size=%lu\t%d\t%d\n",sizeof(ctxgidobj[0]),sizeof(ctxgidobj_t),sketch_size);
+	write_to_file(format_string("%s/%s",refdir,sorted_comb_ctxgid64obj32),ctxgidobj,sizeof(ctxgidobj[0])*sketch_size);
+	free(ctxgidobj);
+}
+
+void write_sketch_stat (const char *outdir, infile_tab_t* infile_stat){
   char (*tmpname)[PATHLEN] = malloc(infile_stat->infile_num * PATHLEN);
   for(int i = 0; i< infile_stat->infile_num; i++ ) memcpy(tmpname[i],(infile_stat->organized_infile_tab)[i].fpath,PATHLEN);
-  concat_and_write_to_file(test_create_fullpath(sketch_opt_val->outdir,sketch_stat),&dim_sketch_stat,sizeof(dim_sketch_stat),tmpname,infile_stat->infile_num * PATHLEN );
-	free(tmpname);
+  concat_and_write_to_file(test_create_fullpath(outdir,sketch_stat),&comblco_stat_one,sizeof(comblco_stat_one),tmpname,infile_stat->infile_num * PATHLEN );
+ free(tmpname);
 }
 
 KSEQ_INIT(gzFile, gzread) 
@@ -595,6 +587,7 @@ printf("OK3\n");
     return final_count;
 }
 
+
 int merge_comblco (sketch_opt_t * sketch_opt_val){
 
 	void *mem_stat = read_from_file( test_get_fullpath(sketch_opt_val->remaining_args[0] ,sketch_stat), &file_size);
@@ -697,26 +690,18 @@ void mfa2sortedctxobj64 ( sketch_opt_t * sketch_opt_val, infile_tab_t* infile_st
 			free_all(lco_ab.keys,lco_ab.values,NULL);
 		}//while
 		kseq_destroy(seq);gzclose(infile);	
-		printf("\r%dth/%d multifasta sketching %s completed!\t #genomes=%lu",i+1,infile_stat->infile_num,(infile_stat->organized_infile_tab)[i].fpath,sketch_index.size - 1 );
+		printf("\r%dth/%d multifasta sketching %s completed!\t #genomes=%lu",i+1,
+			infile_stat->infile_num,(infile_stat->organized_infile_tab)[i].fpath,sketch_index.size - 1 );
+		if (i == infile_stat->infile_num -1) printf("\n");
 	}//for infile
 	fclose(comb_sketch_fp);
-	//write index	
+	//write index	and stat file
 	write_to_file(test_create_fullpath(sketch_opt_val->outdir,idx_sketch_suffix),sketch_index.data,sizeof(uint64_t) * sketch_index.size );
-	vector_free(&sketch_index);
-//write stat file:
-	dim_sketch_stat_t dim_sketch_stat = {
-    .hash_id =  hash_id,
-    .koc = sketch_opt_val->abundance,
-    .klen = klen,
-    .hclen = sketch_opt_val->hclen,
-    .holen = sketch_opt_val->holen,
-    .drfold = sketch_opt_val->drfold, 
-    .infile_num =  sketch_index.size - 1
-  };
+	comblco_stat_one.infile_num =  sketch_index.size - 1;
 	concat_and_write_to_file(test_create_fullpath(sketch_opt_val->outdir,sketch_stat), \
-		&dim_sketch_stat,sizeof(dim_sketch_stat),tmpname,dim_sketch_stat.infile_num * PATHLEN );
+		&comblco_stat_one,sizeof( comblco_stat_one),tmpname, comblco_stat_one.infile_num * PATHLEN );
 
-	free(tmpname);
+	vector_free(&sketch_index);	free(tmpname);
 } // mfa2sortedctxobj64()  
 
 
@@ -731,7 +716,6 @@ void read_genomes2mem2sortedctxobj64 (sketch_opt_t * sketch_opt_val, infile_tab_
 	FILE *comb_sketch_fp;
   if( ( comb_sketch_fp = fopen(format_string("%s/%s",sketch_opt_val->outdir,combined_sketch_suffix),"wb")) == NULL )
     err(errno,"%s() open file error: %s/%s",__func__,sketch_opt_val->outdir,combined_sketch_suffix);
-
 	for( int infile_num_p = 0; infile_num_p < infile_stat->infile_num; infile_num_p++ ){
 		gzFile infile = gzopen((infile_stat->organized_infile_tab)[infile_num_p].fpath,"r");
     if( !infile ) err(errno,"%s(): Cannot open file %s",__func__, (infile_stat->organized_infile_tab)[infile_num_p].fpath);
@@ -746,7 +730,6 @@ void read_genomes2mem2sortedctxobj64 (sketch_opt_t * sketch_opt_val, infile_tab_
 		}
 	  kseq_destroy(seq);
     gzclose(infile);		
-
 		if(  (infile_num_p < infile_stat->infile_num - 1) && infile_num_p % batch_size <  batch_size - 1 ) continue;
 		 	  
     int num = infile_num_p % batch_size + 1 ;
@@ -800,8 +783,7 @@ printf("\r%d/%d genome proceed",infile_num_p,infile_stat->infile_num);
 
 	fclose(comb_sketch_fp);vector_free(&all_reads);
 	free_all(sketch_index,gseq_nums,batch_sketches,NULL);
-//write stat file
-  write_sketch_stat ( sketch_opt_val, infile_stat);
+    write_sketch_stat ( sketch_opt_val->outdir, infile_stat);
 }
 	
 

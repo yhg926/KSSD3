@@ -1,8 +1,9 @@
 #ifndef KSSDLIB_SORT_H
 #define KSSDLIB_SORT_H
 #include "command_ani.h"
-
+#include "sketch_rearrange.h"
 /*0. qsort comparator */
+int qsort_comparator_uint32 (const void *a, const void *b);
 int qsort_comparator_uint64 (const void *a, const void *b);
 /*1. count overlap uint64_t a[N] and b[M]*/
 size_t count_overlaps_two_pointers(const uint64_t *a, size_t n, const uint64_t *b, size_t m);
