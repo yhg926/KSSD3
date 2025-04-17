@@ -29,12 +29,12 @@ static struct argp_option opt_ani[] =
 	{"ref",'r',"<DIR>", 0, "Path of reference sketches, do not set if need trianlge\v",9},
 	{"query",'q',"<DIR>", 0, "Path of query sketches \v",1},
 	{"index",'i',"<FILE>", 0, "Inverted indexing of combined sketch.\v",2},
-	{"metric",'m',"<0/1>", 0, "Using mashD or aafD (0/1) [0]\v",2},
+	{"outfmt",'m',"<0/1/2>", 0, "print results detail/matrix/triangle (0/1/2) [0]\v",2},
 	{"afcut",'f',"<FLOAT>",0,"When report, Skip alignment fraction < [0.1] \v",3},
-    {"anicut",'n',"<FLOAT>",0,"When report, Skip ani < [0.5] \v",3},
+  {"anicut",'n',"<FLOAT>",0,"When report, Skip ani < [0.5] \v",3},
 	{"control",'c',"<FLOAT>",0,"Skip duplicated samples (distance < c) [0] \v",3},
 	{"glist",'g',"<FILE>",0,"Sample outfile for kssd set grouping \v",4},
-	{"outfile",'o',"<FILE>",0,"Matrix outfile path [STDOUT]\v",5},
+	{"outfile",'o',"<FILE>",0,"outfile path [STDOUT]\v",5},
 	{"threads",'p',"<INT>", 0, "Threads number to use \v",6},
 	{"diagonal",'d',0, 0, "set diagonal\v",7},
 	{"exception",'e',"<INT>", 0, "set distance value when XnY == 0 \v",8},
@@ -49,13 +49,13 @@ static char doc_ani[] =
   ;
 
 ani_opt_t ani_opt ={
-	.metric = 0, // 0:mashD, 1:aafD
+	.fmt = 0, // 0:detail, 1:matrix 2: triangle
 	.c = 0.0, //control duplicated sample by skip distance < c;
 	.p = 1,
 	.d = 0, //diagonal
 	.afcut = 0.1,
 	.anicut = 0.3,
-	.e = -1, //abort
+	.e = 0, //abort
 	.index[0]='\0',
 	.refdir[0] = '\0',
 	.qrydir[0] = '\0',
@@ -72,7 +72,7 @@ static error_t parse_ani(int key, char* arg, struct argp_state* state) {
   {		
 		case 'm':
 		{
-				ani_opt.metric = atoi(arg);
+				ani_opt.fmt = atoi(arg);
 				break;
 		}
 		case 'c':
