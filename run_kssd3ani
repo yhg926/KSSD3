@@ -1,0 +1,188 @@
+#!/bin/bash
+
+show_usage() {
+    echo "Usage: $0 [options] -r ref1.fas ref2..fas -q query1.fas query2.fq ..." >&2
+    echo "Options:" >&2
+    echo "  -f NUM    Specify sketching rate 1/2^f (numeric, optional)" >&2
+    echo "  -C NUM    Specify half length of context (numeric, optional)" >&2
+    echo "  -O NUM    Specify half length of object (numeric, optional)" >&2
+    echo "  -m NUM    Specify output format 0:detail 1:matrix (numeric, optional)" >&2
+    echo "  -p NUM    Specify p num of threads used (numeric, optional)" >&2
+    echo "  -r FILES   Specify ref genome files (string, mandatory)" >&2
+    echo "  -q FILES   Specify query genome files (string, mandatory)" >&2
+    echo "  -o FILE   Output file (optional)" >&2
+    echo "  ref/query files must be .fasta or .fastq format" >&2
+    exit 1
+}
+
+# Initialize variables with default empty values
+f_num=""
+C_num=""
+O_num=""
+m_num=""
+p_num=""
+o_file=""
+declare -a ref_files=()
+declare -a query_files=()
+
+# Parse parameters using getopt
+#TEMP=$(getopt -o 'f:C:O:o:r:q:' --long 'f:,C:,O:,o:,ref:,query:' -n "$0" -- "$@") || exit 1
+#eval set -- "$TEMP"
+
+# Process parameters
+[[ $# -gt 0 ]] || show_usage 
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -f|--f)
+            f_num="$2"
+            shift 2
+            ;;
+        -C|--C)
+            C_num="$2"
+            shift 2
+            ;;
+				-O|--O)
+            O_num="$2"
+            shift 2
+            ;;
+        -m|--m)
+            m_num="$2"
+            shift 2
+            ;;
+        -p|--p)
+            p_num="$2"
+            shift 2
+            ;;
+				-o|--o)
+            o_file="$2"
+            shift 2
+            ;;	
+        -r|--ref)
+            shift
+            while [[ $# -gt 0 && ! "$1" == -* ]]; do
+							shopt -s extglob nullglob
+                # 展开每个参数中的通配符
+                for expanded_file in $1; do
+                    if [[ -e "$expanded_file" ]]; then
+                        ref_files+=("$expanded_file")
+                    else
+                        echo "warning: '$expanded_file' not exists" >&2
+                    fi
+                done
+  							shopt -u extglob nullglob  # 恢复shell选项
+	              shift
+            done
+    			;;         
+        -q|--query)
+        	shift
+          while [[ $# -gt 0 && ! "$1" == -* ]]; do
+          	shopt -s extglob nullglob
+              # 展开每个参数中的通配符
+              for expanded_file in $1; do
+              		if [[ -e "$expanded_file" ]]; then
+                 			query_files+=("$expanded_file")
+                  else
+                     echo "warning: '$expanded_file' not exists" >&2
+                  fi
+                done
+                shopt -u extglob nullglob  # 恢复shell选项
+                shift
+            done
+          ;;
+			  --)
+            shift
+            break
+            ;;
+        *)
+            echo "Internal error!: space is mandatory between option and values" >&2
+            exit 1
+            ;;
+    esac
+done
+
+# Validate numeric parameters only if provided
+validate_numeric() {
+    local param_name="$1"
+    local param_value="$2"
+    
+    if [[ -n "$param_value" && ! "$param_value" =~ ^[0-9]+$ ]]; then
+        echo "Error: -$param_name must be numeric when provided" >&2
+        exit 1
+    fi
+}
+
+validate_numeric "f" "$f_num"
+validate_numeric "C" "$C_num"
+validate_numeric "O" "$O_num"
+validate_numeric "m" "$m_num"
+validate_numeric "p" "$p_num"
+
+# 定义通用校验函数
+validate_files() {
+    local file_type=$1
+    shift  # 接收文件数组参数
+    local files=("$@")
+
+    for file in "${files[@]}"; do
+        # 检查文件是否存在
+        if [[ ! -f "$file" ]]; then
+            echo "Error: $file_type file '$file' does not exist" >&2
+            exit 2
+        fi
+
+        # 校验文件扩展名格式（支持常见 FASTA/FASTQ 格式）
+        if [[ ! "$file" =~ \.(fa|fas|fna|fasta|fastq|fq)(\.gz)?$ ]]; then
+            echo "Error: $file_type file '$file' must be .fa/.fasta/.fq/.fastq format" >&2
+            exit 2
+        fi
+    done
+}
+
+# 校验参考文件集
+if [[ ${#ref_files[@]} -gt 0 ]]; then
+    validate_files "Reference" "${ref_files[@]}"
+else
+    echo "Error: At least one reference file (-r) is required" >&2
+    exit 1
+fi
+
+# 校验查询文件集
+if [[ ${#query_files[@]} -gt 0 ]]; then
+    validate_files "Query" "${query_files[@]}"
+else
+    echo "Error: At least one query file (-q) is required" >&2
+    exit 1
+fi
+
+combined_options=""
+[[ -n "$f_num" ]] && combined_options+="-f${f_num} "
+[[ -n "$C_num" ]] && combined_options+="-C${C_num} "
+[[ -n "$O_num" ]] && combined_options+="-O${O_num} "
+[[ -n "$p_num" ]] && combined_options+="-p${p_num} "
+combined_options="${combined_options%% }"
+
+
+PRO_D="."
+PRGRAM="$PRO_D/bin/kssd3"
+TMP_D=$(mktemp -d /tmp/myapp.XXXXXX) 
+
+$PRGRAM sketch $combined_options -o $TMP_D/ref ${ref_files[@]} >>  $TMP_D/run.log 
+$PRGRAM sketch $combined_options -o $TMP_D/qry ${query_files[@]} >>  $TMP_D/run.log
+$PRGRAM sketch -i $TMP_D/ref >>  $TMP_D/run.log
+
+# Processing example with optional parameters
+#echo "sketching genomes using Processing parameters:"
+#echo "$combined_options"
+#echo "sketches created on $TMP_D"
+
+combined_options=""
+[[ -n "$m_num" ]] && combined_options+="-m${m_num} "
+[[ -n "$o_file" ]] && combined_options+="-o${o_file} "
+$PRGRAM ani $combined_options -r $TMP_D/ref -q $TMP_D/qry  
+
+
+
+
+
+
+
