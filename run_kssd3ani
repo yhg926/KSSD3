@@ -16,11 +16,11 @@ show_usage() {
 }
 
 # Initialize variables with default empty values
-f_num=""
-C_num=""
-O_num=""
-m_num=""
-p_num=""
+f_num=8
+C_num=11
+O_num=5
+m_num=0
+p_num=8
 o_file=""
 declare -a ref_files=()
 declare -a query_files=()
@@ -171,16 +171,21 @@ $PRGRAM sketch $combined_options -o $TMP_D/qry ${query_files[@]} >>  $TMP_D/run.
 $PRGRAM sketch -i $TMP_D/ref >>  $TMP_D/run.log
 
 # Processing example with optional parameters
-#echo "sketching genomes using Processing parameters:"
+#echo ">>> ref sketching: $PRGRAM sketch $combined_options -o $TMP_D/ref ref_files[@] >>  $TMP_D/run.log"
+#echo ">>> qry sketching: $PRGRAM sketch $combined_options -o $TMP_D/qry query_files[@] >>  $TMP_D/run.log"
+#echo ">>> invert index ref: $PRGRAM sketch -i $TMP_D/ref >>  $TMP_D/run.log"
 #echo "$combined_options"
 #echo "sketches created on $TMP_D"
 
 combined_options=""
 [[ -n "$m_num" ]] && combined_options+="-m${m_num} "
 [[ -n "$o_file" ]] && combined_options+="-o${o_file} "
+
+#echo ">>> estimating ani: $PRGRAM ani $combined_options -r $TMP_D/ref -q $TMP_D/qry"
+printf "\v"
 $PRGRAM ani $combined_options -r $TMP_D/ref -q $TMP_D/qry  
 
-
+rm -r $TMP_D
 
 
 
