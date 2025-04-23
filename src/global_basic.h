@@ -359,6 +359,8 @@ typedef struct {
 unify_sketch_t* generic_sketch_parse(const char *qrydir) ;
 void free_unify_sketch(unify_sketch_t *result) ;
 void free_read_from_file (void *buffer, size_t file_size);
+
+uint64_t GetAvailableMemory();
 #endif
 
 

@@ -17,6 +17,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+
 /*global basemap and mapbase*/
 #if ALPHABET == 1 // objs compatible mode
 const int Basemap[128] =
@@ -929,4 +930,15 @@ void replace_special_chars_with_underscore(char *str) {
             str[i] = '_';         // Replace it with an underscore
         }
     }
+}
+
+
+uint64_t GetAvailableMemory() {
+    struct sysinfo info;
+    if (sysinfo(&info) == -1) {
+        perror("sysinfo failed");
+        return 0;
+    }
+    
+    return (info.freeram * info.mem_unit);
 }
