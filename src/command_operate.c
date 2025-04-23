@@ -174,7 +174,11 @@ int lgrouping_genomes(set_opt_t* set_opt){
 	if(tmp_idx[subset->gn]*sizeof(uint64_t) != file_size) err(EXIT_FAILURE,"%s(): %s last(%u) index(%lu) * sizeof(uint64_t) != %s file size (%lu) ", \
 			 __func__,idx_sketch_suffix,subset->gn,tmp_idx[subset->gn], combined_sketch_suffix ,file_size);
 // out index and comblco
-	uint64_t *grouped_comblco = (uint64_t *)malloc(file_size);  	
+	char *lcombco_f = test_create_fullpath(set_opt->outdir,combined_sketch_suffix); 
+	int fd = open(lcombco_f, O_CREAT | O_RDWR, 0644);
+	ftruncate(fd, file_size);  // 创建80GB文件
+	uint64_t *grouped_comblco = (uint64_t *)mmap(NULL, file_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+ 	
 	uint64_t *out_idx  = calloc( (subset->taxn+1), sizeof(uint64_t));
   int outfn = 0; uint64_t grouped_kmer_ct = 0;
 
@@ -197,7 +201,10 @@ int lgrouping_genomes(set_opt_t* set_opt){
 		kh_destroy(kmer_set,h);		
 	}
 	//write grouped kmer and index to result
-	write_to_file(test_create_fullpath(set_opt->outdir,combined_sketch_suffix), grouped_comblco, grouped_kmer_ct*sizeof(grouped_comblco[0]));
+	//write_to_file(test_create_fullpath(set_opt->outdir,combined_sketch_suffix), grouped_comblco, grouped_kmer_ct*sizeof(grouped_comblco[0]));
+	if (msync(grouped_comblco, grouped_kmer_ct*sizeof(grouped_comblco[0]), MS_SYNC) == -1)  err(EXIT_FAILURE,"%s(): msync error", __func__);
+	if (ftruncate(fd, grouped_kmer_ct*sizeof(grouped_comblco[0])) == -1) err(EXIT_FAILURE,"%s(): ftrucate resize failed", __func__);
+	if (munmap(grouped_comblco, file_size) == -1) err(EXIT_FAILURE,"%s(): munmap", __func__); 
   write_to_file(test_create_fullpath(set_opt->outdir,idx_sketch_suffix), out_idx, (outfn+1)*sizeof(out_idx[0]));
 	//write stat file 
 	lco_stat_readin.infile_num = outfn; lco_stat_readin.koc = 0;
@@ -212,8 +219,13 @@ int lgrouping_genomes(set_opt_t* set_opt){
     free_all(subset->tax[t].gids, subset->tax[t].taxname,NULL);
   }
 	concat_and_write_to_file(test_create_fullpath(set_opt->outdir,sketch_stat),&lco_stat_readin,sizeof(lco_stat_readin),tmpfname,PATHLEN*outfn);
+	if (munmap(mem_comblco, file_size) == -1) {
+		if(mem_comblco != NULL) free(mem_comblco);
+		else
+		 err(EXIT_FAILURE,"%s(): munmap", __func__);
+	}
 	
-	free_all( mem_stat, mem_comblco,grouped_comblco,tmp_idx,out_idx,subset->tax,subset,tmpfname,NULL );
+	free_all( mem_stat,tmp_idx,out_idx,subset->tax,subset,tmpfname,NULL );
  	return outfn;
 }
 
