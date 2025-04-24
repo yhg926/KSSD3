@@ -219,8 +219,13 @@ int lgrouping_genomes(set_opt_t* set_opt){
     free_all(subset->tax[t].gids, subset->tax[t].taxname,NULL);
   }
 	concat_and_write_to_file(test_create_fullpath(set_opt->outdir,sketch_stat),&lco_stat_readin,sizeof(lco_stat_readin),tmpfname,PATHLEN*outfn);
+	if (munmap(mem_comblco, file_size) == -1) {
+		if(mem_comblco != NULL) free(mem_comblco);
+		else
+		 err(EXIT_FAILURE,"%s(): munmap", __func__);
+	}
 	
-	free_all( mem_stat, mem_comblco,grouped_comblco,tmp_idx,out_idx,subset->tax,subset,tmpfname,NULL );
+	free_all( mem_stat,tmp_idx,out_idx,subset->tax,subset,tmpfname,NULL );
  	return outfn;
 }
 
