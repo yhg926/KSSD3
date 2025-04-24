@@ -159,7 +159,7 @@ clock_t start_time = clock();
 
 
 
-int lgrouping_genomes(set_opt_t* set_opt){
+int lgrouping_genomes(set_opt_t* set_opt){ // for sorted lcombco only !!! old unsorted one not suportted
 
 	void *mem_stat = read_from_file( test_get_fullpath(set_opt->insketchpath,sketch_stat) , &file_size);
 	memcpy(&lco_stat_readin,mem_stat,sizeof(lco_stat_readin));
@@ -176,35 +176,36 @@ int lgrouping_genomes(set_opt_t* set_opt){
 // out index and comblco
 	char *lcombco_f = test_create_fullpath(set_opt->outdir,combined_sketch_suffix); 
 	int fd = open(lcombco_f, O_CREAT | O_RDWR, 0644);
-	ftruncate(fd, file_size);  // 创建80GB文件
+	ftruncate(fd, file_size);  // allowing much larger grouped_comblco than using malloc
 	uint64_t *grouped_comblco = (uint64_t *)mmap(NULL, file_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
  	
 	uint64_t *out_idx  = calloc( (subset->taxn+1), sizeof(uint64_t));
-  int outfn = 0; uint64_t grouped_kmer_ct = 0;
+  int outfn = 0; //uint64_t grouped_kmer_ct = 0;
 
 	for(int t = 0; t < subset->taxn; t++){
 		if(subset->tax[t].taxid == 0) continue;// ignore taxid 0		
-		outfn++; out_idx[outfn] = out_idx[outfn-1];
-		khash_t(kmer_set) *h = kh_init(kmer_set); 
+		outfn++;
+		uint64_t start_offset = out_idx[outfn] = out_idx[outfn-1];	
 		for(int n = 1; n <= subset->tax[t].gids[0];n++){
-			int gid = subset->tax[t].gids[n] ;		
-			for(uint64_t i = tmp_idx[gid]; i < tmp_idx[gid+1]; i++)
-      	kh_put(kmer_set, h, mem_comblco[i],&ret);		
+			int gid = subset->tax[t].gids[n] ;
+			memcpy(grouped_comblco + start_offset , mem_comblco + tmp_idx[gid], (tmp_idx[gid+1] - tmp_idx[gid]) * sizeof(grouped_comblco[0]));		
+			start_offset += (tmp_idx[gid+1] - tmp_idx[gid]);
 		}
-		//write into comblco for tax t
-		for (khint_t k = kh_begin(h); k != kh_end(h); ++k) {
-      if (kh_exist(h, k)) {
-				grouped_comblco[grouped_kmer_ct++] = kh_key(h, k);
-				out_idx[outfn]++;	
-			}
-    }	
-		kh_destroy(kmer_set,h);		
+		
+		if (subset->tax[t].gids[0] > 1){
+			qsort(grouped_comblco + out_idx[outfn], start_offset - out_idx[outfn], sizeof(grouped_comblco[0]),qsort_comparator_uint64);
+			size_t len = dedup_sorted_uint64(grouped_comblco + out_idx[outfn], start_offset - out_idx[outfn] );
+			out_idx[outfn] += len;
+		}
+		else out_idx[outfn] = start_offset;	
 	}
 	//write grouped kmer and index to result
 	//write_to_file(test_create_fullpath(set_opt->outdir,combined_sketch_suffix), grouped_comblco, grouped_kmer_ct*sizeof(grouped_comblco[0]));
-	if (msync(grouped_comblco, grouped_kmer_ct*sizeof(grouped_comblco[0]), MS_SYNC) == -1)  err(EXIT_FAILURE,"%s(): msync error", __func__);
-	if (ftruncate(fd, grouped_kmer_ct*sizeof(grouped_comblco[0])) == -1) err(EXIT_FAILURE,"%s(): ftrucate resize failed", __func__);
+	if (msync(grouped_comblco, out_idx[outfn] * sizeof(grouped_comblco[0]), MS_SYNC) == -1)  err(EXIT_FAILURE,"%s(): msync error", __func__);
+	if (ftruncate(fd, out_idx[outfn] * sizeof(grouped_comblco[0])) == -1) err(EXIT_FAILURE,"%s(): ftrucate resize failed", __func__);
 	if (munmap(grouped_comblco, file_size) == -1) err(EXIT_FAILURE,"%s(): munmap", __func__); 
+	close(fd);
+
   write_to_file(test_create_fullpath(set_opt->outdir,idx_sketch_suffix), out_idx, (outfn+1)*sizeof(out_idx[0]));
 	//write stat file 
 	lco_stat_readin.infile_num = outfn; lco_stat_readin.koc = 0;
