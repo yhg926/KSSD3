@@ -24,7 +24,7 @@
 //pulic vars
 const char gid_obj_prefix[] = "gidobj", ctx_idx_prefix[] = "ctx.index";
 extern const char sorted_comb_ctxgid64obj32[];
-extern double ani_Coeff[6];
+extern double C9O7_98[6], C9O7_96[6];
 size_t file_size;
 /*
 int compute_ani(ani_opt_t *ani_opt){
@@ -50,8 +50,23 @@ printf("FLG4:%lu\n",time(NULL) - second);
  printf("FLG5:%lu\n",time(NULL) - second);
 }
 */
-//linear model
-//1. f8C9O7I0
+
+//ani linear learning coeffs
+double C9O7_98[6] = {-88.96, 3.701e-5, 1.537, 1.324, 8.118, 1.856};
+double C9O7_96[6] = {-34.01, -1.225e-4, 5.524, 6.456, 39.88, 4.289};
+
+inline double get_learned_ani (int XnY_ctx, float af_qry, float af_ref, float dist, float ani){
+  double learned_ani = 0; double coeffs[6] = {0};
+  if(hclen == 9 && holen == 7){
+    if (ani >= 98) memcpy(coeffs,C9O7_98, sizeof(C9O7_98));
+    else if(ani >= 96) memcpy(coeffs,C9O7_96, sizeof(C9O7_96));
+    else return learned_ani;
+    learned_ani = coeffs[0] + coeffs[1]*XnY_ctx + coeffs[2]*af_qry + coeffs[3]*af_ref + coeffs[4]*dist + coeffs[5]*ani;
+  }
+  if(learned_ani > 100 ) learned_ani = 100;
+  return learned_ani;
+}
+//-----------
 
 int compare_idani_desc(const void *a, const void *b) {
     const idani_t *itemA = (const idani_t *)a;
@@ -176,8 +191,7 @@ void ani_block_print(int ref_infile_num, int qry_gid_offset, int this_block_size
       float af_ref = (float)XnY_ctx / ref_sketch_size ;
       double dist = (double)MOBJ(ref_infile_num,i,j)/XnY_ctx;
       double ani = sort_idani_block[i][n].ani * 100;
-			double learned_ani = ani_Coeff[5] == 0 ? 0: ani_Coeff[0] + ani_Coeff[1]*XnY_ctx + ani_Coeff[2]*af_qry + ani_Coeff[3]*af_ref + ani_Coeff[4]*dist + ani_Coeff[5]*ani;
-			if(learned_ani > 100 ) learned_ani = 100;
+			double learned_ani = get_learned_ani(XnY_ctx, af_qry, af_ref, dist,ani);
       fprintf(outfp,"%s\t%s\t%d\t%f\t%f\t%lf\t%lf\t%lf\n",qryfname[qry_gid],refname[j], XnY_ctx,af_qry,af_ref,dist,ani,learned_ani);
     }
   }
@@ -203,10 +217,9 @@ void ani_block_print_matrix (int ref_infile_num, int qry_gid_offset, int this_bl
 		fprintf(outfp,"\n");
 	}
 }
- 
 
 
-
+//
 #define DIFF_OBJ_BITS 1
 size_t dedup_with_ctxobj_counts(uint32_t *arr, size_t n, co_distance_t **ctxobj_cnt) {
     *ctxobj_cnt = NULL;
