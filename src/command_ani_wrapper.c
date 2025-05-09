@@ -179,6 +179,7 @@ static struct argp argp_ani =
   doc_ani
 };
 extern const char sorted_comb_ctxgid64obj32[];
+double ani_Coeff[6] = {0};
 
 int cmd_ani(struct argp_state* state)
 {
@@ -187,12 +188,18 @@ int cmd_ani(struct argp_state* state)
   char** argv = &state->argv[state->next - 1];
   ani.global = state->input;
   argp_parse(&argp_ani, argc, argv, ARGP_IN_ORDER, &argc, &ani);
-
   state->next += argc - 1;
 	size_t file_size;
+
   if (ani_opt.qrydir[0] != '\0') {
-	dim_sketch_stat_t *qry_dim_sketch_stat = read_from_file(test_get_fullpath(ani_opt.qrydir, sketch_stat),&file_size);
+		dim_sketch_stat_t *qry_dim_sketch_stat = read_from_file(test_get_fullpath(ani_opt.qrydir, sketch_stat),&file_size);
     const_comask_init(qry_dim_sketch_stat);
+//set ani linear regression coeffients	
+		if(hclen == 9 && holen == 7 ) {
+			double temp[] = {-88.96, 3.701e-05, 1.537, 1.324, 8.118, 1.856};
+			memcpy(ani_Coeff,temp,sizeof(temp));
+		}
+
   	if (ani_opt.refdir[0] == '\0') return 1 ;//compute_triangle(&ani_opt);
 	else {
 		if(file_exists_in_folder(ani_opt.refdir,sorted_comb_ctxgid64obj32)) {

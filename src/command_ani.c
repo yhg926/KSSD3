@@ -24,6 +24,7 @@
 //pulic vars
 const char gid_obj_prefix[] = "gidobj", ctx_idx_prefix[] = "ctx.index";
 extern const char sorted_comb_ctxgid64obj32[];
+extern double ani_Coeff[6];
 size_t file_size;
 /*
 int compute_ani(ani_opt_t *ani_opt){
@@ -49,6 +50,8 @@ printf("FLG4:%lu\n",time(NULL) - second);
  printf("FLG5:%lu\n",time(NULL) - second);
 }
 */
+//linear model
+//1. f8C9O7I0
 
 int compare_idani_desc(const void *a, const void *b) {
     const idani_t *itemA = (const idani_t *)a;
@@ -133,7 +136,7 @@ int mem_eff_sorted_ctxgidobj_arrXcomb_sortedsketch64(ani_opt_t *ani_opt){
 		for(int i = 0;i < ref_infile_num;i++) fprintf(outfp, "\t%s",refname[i]);
 		fprintf(outfp,"\n");
 	}
-	else fprintf(outfp,"Qry\tRef\tXnY_ctx\tQry_align_fraction\tRef_align_fraction\tco-distance\tANI\n");
+	else fprintf(outfp,"Qry\tRef\tXnY_ctx\tQry_align_fraction\tRef_align_fraction\tco-distance\tANI\tlearned_ANI(if > 0)\n");
 
   for( int b = 0; b <= qry_infile_num/block_size ; b++){
 
@@ -173,7 +176,9 @@ void ani_block_print(int ref_infile_num, int qry_gid_offset, int this_block_size
       float af_ref = (float)XnY_ctx / ref_sketch_size ;
       double dist = (double)MOBJ(ref_infile_num,i,j)/XnY_ctx;
       double ani = sort_idani_block[i][n].ani * 100;
-      fprintf(outfp,"%s\t%s\t%d\t%f\t%f\t%lf\t%lf\n",qryfname[qry_gid],refname[j], XnY_ctx,af_qry,af_ref,dist,ani);
+			double learned_ani = ani_Coeff[5] == 0 ? 0: ani_Coeff[0] + ani_Coeff[1]*XnY_ctx + ani_Coeff[2]*af_qry + ani_Coeff[3]*af_ref + ani_Coeff[4]*dist + ani_Coeff[5]*ani;
+			if(learned_ani > 100 ) learned_ani = 100;
+      fprintf(outfp,"%s\t%s\t%d\t%f\t%f\t%lf\t%lf\t%lf\n",qryfname[qry_gid],refname[j], XnY_ctx,af_qry,af_ref,dist,ani,learned_ani);
     }
   }
 }
