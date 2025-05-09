@@ -53,7 +53,7 @@ printf("FLG4:%lu\n",time(NULL) - second);
 
 //ani linear learning coeffs
 double C9O7_98[6] = {-88.96, 3.701e-5, 1.537, 1.324, 8.118, 1.856};
-double C9O7_96[6] = {-34.01, -1.225e-4, 5.524, 6.456, 39.88, 4.289};
+double C9O7_96[6] = {-340.1, -1.225e-4, 5.524, 6.456, 39.88, 4.289};
 
 inline double get_learned_ani (int XnY_ctx, float af_qry, float af_ref, float dist, float ani){
   double learned_ani = 0; double coeffs[6] = {0};
