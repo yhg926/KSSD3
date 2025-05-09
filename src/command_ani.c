@@ -58,9 +58,8 @@ double C9O7_96[6] = {-34.01, -1.225e-4, 5.524, 6.456, 39.88, 4.289};
 inline double get_learned_ani (int XnY_ctx, float af_qry, float af_ref, float dist, float ani){
   double learned_ani = 0; double coeffs[6] = {0};
   if(hclen == 9 && holen == 7){
-    if (ani >= 98) memcpy(coeffs,C9O7_98, sizeof(C9O7_98));
-    else if(ani >= 96) memcpy(coeffs,C9O7_96, sizeof(C9O7_96));
-    else return learned_ani;
+    if (ani >= 98 && af_qry > 0.2 && af_ref > 0.2) memcpy(coeffs,C9O7_98, sizeof(C9O7_98));
+    else memcpy(coeffs,C9O7_96, sizeof(C9O7_96));
     learned_ani = coeffs[0] + coeffs[1]*XnY_ctx + coeffs[2]*af_qry + coeffs[3]*af_ref + coeffs[4]*dist + coeffs[5]*ani;
   }
   if(learned_ani > 100 ) learned_ani = 100;
