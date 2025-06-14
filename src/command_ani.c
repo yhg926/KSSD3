@@ -18,6 +18,7 @@
 #include <stdatomic.h>
 #include <ctype.h>
 #include "../klib/khash.h"
+#include <xgboost/c_api.h>
 //#include "../klib/khashl.h"
 #define GID_NBITS 20 //2^20, 1M
 #define CONFLICT_OBJ UINT32_MAX
@@ -54,13 +55,40 @@ printf("FLG4:%lu\n",time(NULL) - second);
 //ani linear learning coeffs
 double C9O7_98[6] = {-88.96, 3.701e-5, 1.537, 1.324, 8.118, 1.856};
 double C9O7_96[6] = {-340.1, -1.225e-4, 5.524, 6.456, 39.88, 4.289};
+// xgb model Global handles
+BoosterHandle booster = NULL;
+DMatrixHandle dmatrix = NULL;
+const char model_path[] = "f8C9O7_model.xgb";
+// Load model once at program start
+void init_model(const char *model_path) {
+    if (XGBoosterCreate(NULL, 0, &booster) != 0)  err(EXIT_FAILURE,"%s(): Failed to create booster.",__func__);
+    if (XGBoosterLoadModel(booster, model_path) != 0) err(EXIT_FAILURE,"%s(): Failed to load model.",__func__);
+    
+}
+// Free model at program end
+void cleanup_model() {
+    if (booster) XGBoosterFree(booster);
+    if (dmatrix) XGDMatrixFree(dmatrix);
+}
+//const bst_ulong n_rows = 1;
+//const bst_ulong n_cols = 5;
 
 inline double get_learned_ani (int XnY_ctx, float af_qry, float af_ref, float dist, float ani){
   double learned_ani = 0; double coeffs[6] = {0};
   if(hclen == 9 && holen == 7){
+/* linear model
     if (ani >= 98 && af_qry > 0.2 && af_ref > 0.2) memcpy(coeffs,C9O7_98, sizeof(C9O7_98));
     else memcpy(coeffs,C9O7_96, sizeof(C9O7_96));
     learned_ani = coeffs[0] + coeffs[1]*XnY_ctx + coeffs[2]*af_qry + coeffs[3]*af_ref + coeffs[4]*dist + coeffs[5]*ani;
+*/
+		// xgb model
+		float data[5] = {  (float)XnY_ctx, af_qry, af_ref, dist, ani };	
+		if (dmatrix) XGDMatrixFree(dmatrix); 
+		//# XGDMatrixCreateFromMat(data, n_rows, n_cols, missing, &dmatrix)
+		if (XGDMatrixCreateFromMat(data, 1, 5, -1, &dmatrix) != 0)  err(EXIT_FAILURE,"%s(): Failed to create DMatrix.",__func__);
+		const float *out_result; bst_ulong out_len;
+		if (XGBoosterPredict(booster, dmatrix, 0, 0, 0, &out_len, &out_result) != 0) err(EXIT_FAILURE,"%s(): Prediction failed.",__func__);
+		learned_ani	= (double)out_result[0];
   }
   if(learned_ani > 100 ) learned_ani = 100;
   return learned_ani;
@@ -145,6 +173,8 @@ int mem_eff_sorted_ctxgidobj_arrXcomb_sortedsketch64(ani_opt_t *ani_opt){
   char (*qryname)[PATHLEN] = (char (*)[PATHLEN])(qry_dim_sketch_stat + 1);
 
   FILE *outfp = ani_opt->outf[0]=='\0' ? stdout: fopen( ani_opt->outf, "w");
+//load model 
+ if (XGBoosterLoadModel(booster, "f8C9O7_model.xgb") != 0) err(EXIT_FAILURE,"%s(): Failed to load model.",__func__);
 //printf header
 	if(ani_opt->fmt) { // matrix format
 		for(int i = 0;i < ref_infile_num;i++) fprintf(outfp, "\t%s",refname[i]);
