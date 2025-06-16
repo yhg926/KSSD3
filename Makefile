@@ -14,6 +14,8 @@ XGB_LIB := $(ROOT)/xgboost/lib
 PREFIX := /usr/local
 
 all: $(TARGET)
+	@echo "Build completed."
+	@echo "👉 If you haven’t already, run: make install_env to set LD_LIBRARY_PATH for libxgboost"
 
 $(TARGET):
 	@mkdir -p $(BIN)
@@ -24,7 +26,7 @@ clean:
 	rm -f $(TARGET)
 
 install_env:
-	echo 'export LD_LIBRARY_PATH=$$LD_LIBRARY_PATH:$(ROOT)/lib' >> ~/.bashrc
+	echo 'export LD_LIBRARY_PATH=$$LD_LIBRARY_PATH:$(ROOT)/xgboost/lib' >> ~/.bashrc
 	@echo "Added to .bashrc. Run 'source ~/.bashrc' to apply."
 
 install: all
