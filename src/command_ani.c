@@ -58,7 +58,7 @@ double C9O7_96[6] = {-340.1, -1.225e-4, 5.524, 6.456, 39.88, 4.289};
 // xgb model Global handles
 BoosterHandle booster = NULL;
 DMatrixHandle dmatrix = NULL;
-const char model_path[] = "f8C9O7_model.xgb";
+//const char model_path[] = "f8C9O7_model.xgb";
 // Load model once at program start
 void init_model(const char *model_path) {
     if (XGBoosterCreate(NULL, 0, &booster) != 0)  err(EXIT_FAILURE,"%s(): Failed to create booster.",__func__);
@@ -83,6 +83,7 @@ inline double get_learned_ani (int XnY_ctx, float af_qry, float af_ref, float di
 */
 		// xgb model
 		float data[5] = {  (float)XnY_ctx, af_qry, af_ref, dist, ani };	
+		//float data[5] = {  17748, 0.995904, 0.995904, 0.000000, 100.000000 };
 		if (dmatrix) XGDMatrixFree(dmatrix); 
 		//# XGDMatrixCreateFromMat(data, n_rows, n_cols, missing, &dmatrix)
 		if (XGDMatrixCreateFromMat(data, 1, 5, -1, &dmatrix) != 0)  err(EXIT_FAILURE,"%s(): Failed to create DMatrix.",__func__);
@@ -174,7 +175,7 @@ int mem_eff_sorted_ctxgidobj_arrXcomb_sortedsketch64(ani_opt_t *ani_opt){
 
   FILE *outfp = ani_opt->outf[0]=='\0' ? stdout: fopen( ani_opt->outf, "w");
 //load model 
- if (XGBoosterLoadModel(booster, "f8C9O7_model.xgb") != 0) err(EXIT_FAILURE,"%s(): Failed to load model.",__func__);
+	init_model("f8C9O7_model.xgb");
 //printf header
 	if(ani_opt->fmt) { // matrix format
 		for(int i = 0;i < ref_infile_num;i++) fprintf(outfp, "\t%s",refname[i]);
@@ -203,6 +204,8 @@ int mem_eff_sorted_ctxgidobj_arrXcomb_sortedsketch64(ani_opt_t *ani_opt){
   free_all(ref_dim_sketch_stat,ref_sketch_index,qry_dim_sketch_stat,qry_sketch_index,tmp_ctxobj,ctx,obj,num_passid_block,sort_idani_block,NULL);
   free_read_from_file(sortedcomb_ctxgid64obj32,ctxgidobj_arr_fsize);
   fclose(fp); fclose(outfp);
+	// clean xgb model
+	cleanup_model();
   return ctxgidobj_arr_fsize;
 }
 
