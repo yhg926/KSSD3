@@ -1,26 +1,37 @@
-CFLAGS= -std=gnu11 -Wno-format-overflow -Wno-unused-result -O3 -ggdb -mavx2 -mbmi2 -fopenmp -march=native
-SOURCE=./src
-BIN=./bin
-PRONAME=kssd3
+CC = gcc
+CFLAGS = -std=gnu11 -Wno-format-overflow -Wno-unused-result -O3 -ggdb -mavx2 -mbmi2 -fopenmp -march=native
 
-# Add XGBoost include and lib paths
-XGB_INCLUDE=/home/ubt/work1/tools/xgboost/include
-XGB_LIB=/home/ubt/work1/tools/xgboost/lib
+ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+SOURCE := $(ROOT)/src
+BIN := $(ROOT)/bin
+PRONAME := kssd3
+TARGET := $(BIN)/$(PRONAME)
 
-all:
-	$(CC) $(CFLAGS) $(SOURCE)/*.c -o $(BIN)/$(PRONAME) \
+# XGBoost paths
+XGB_INCLUDE := $(ROOT)/xgboost/include
+XGB_LIB := $(ROOT)/xgboost/lib
+
+PREFIX := /usr/local
+
+all: $(TARGET)
+
+$(TARGET):
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) $(SOURCE)/*.c -o $(TARGET) \
 	-Iklib -I$(XGB_INCLUDE) -L$(XGB_LIB) -lxgboost -lz -lm
+
 clean:
-	rm -f $(BIN)/$(PRONAME)
+	rm -f $(TARGET)
 
+install_env:
+	echo 'export LD_LIBRARY_PATH=$$LD_LIBRARY_PATH:$(ROOT)/lib' >> ~/.bashrc
+	@echo "Added to .bashrc. Run 'source ~/.bashrc' to apply."
 
-#old
-#CC=gcc
-#CFLAGS= -std=gnu11 -Wno-format-overflow -Wno-unused-result -O3 -ggdb -mavx2 -mbmi2 -fopenmp -march=native 
-#SOURCE="./src"
-#BIN="./bin"
-#PRONAME="kssd3"
+install: all
+	sudo install -m 755 $(TARGET) $(PREFIX)/bin/$(PRONAME)
+	@echo "Installed $(PRONAME) to $(PREFIX)/bin"
 
-#all:
-#	$(CC) $(CFLAGS) $(SOURCE)/*.c -o $(BIN)/$(PRONAME) -Iklib -lz -lm 
+uninstall:
+	sudo rm -f $(PREFIX)/bin/$(PRONAME)
+	@echo "Removed $(PRONAME) from $(PREFIX)/bin"
 
