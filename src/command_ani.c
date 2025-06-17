@@ -175,7 +175,8 @@ int mem_eff_sorted_ctxgidobj_arrXcomb_sortedsketch64(ani_opt_t *ani_opt){
 
   FILE *outfp = ani_opt->outf[0]=='\0' ? stdout: fopen( ani_opt->outf, "w");
 //load model 
-	init_model("f8C9O7_model.xgb");
+	if(ani_opt->model[0]=='\0')  err(EXIT_FAILURE,"%s(): need specify model file using -M ",__func__);
+	init_model(ani_opt->model);//f8C9O7_model.xgb
 //printf header
 	if(ani_opt->fmt) { // matrix format
 		for(int i = 0;i < ref_infile_num;i++) fprintf(outfp, "\t%s",refname[i]);

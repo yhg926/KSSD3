@@ -10,6 +10,7 @@ show_usage() {
     echo "  -p NUM    Specify p num of threads used (numeric, optional)" >&2
     echo "  -r FILES   Specify ref genome files (string, mandatory)" >&2
     echo "  -q FILES   Specify query genome files (string, mandatory)" >&2
+		echo "  -M FILE   Specify ani model files (string, mandatory)" >&2
     echo "  -o FILE   Output file (optional)" >&2
     echo "  ref/query files must be .fasta or .fastq format" >&2
     exit 1
@@ -17,14 +18,14 @@ show_usage() {
 
 # Initialize variables with default empty values
 f_num=8
-C_num=11
-O_num=5
+C_num=9
+O_num=7
 m_num=0
 p_num=8
 o_file=""
+model_file=""
 declare -a ref_files=()
 declare -a query_files=()
-
 # Parse parameters using getopt
 #TEMP=$(getopt -o 'f:C:O:o:r:q:' --long 'f:,C:,O:,o:,ref:,query:' -n "$0" -- "$@") || exit 1
 #eval set -- "$TEMP"
@@ -56,7 +57,11 @@ while [[ $# -gt 0 ]]; do
 				-o|--o)
             o_file="$2"
             shift 2
-            ;;	
+            ;;
+				-M|--model)
+						model_file="$2"
+						shift 2
+						;;	
         -r|--ref)
             shift
             while [[ $# -gt 0 && ! "$1" == -* ]]; do
@@ -164,6 +169,7 @@ combined_options="${combined_options%% }"
 
 PRO_D="."
 PRGRAM="$PRO_D/bin/kssd3"
+#MODEL_C9O7="$PRO_D/ani_models/f8C9O7_model.xgb"
 TMP_D=$(mktemp -d /tmp/myapp.XXXXXX) 
 
 $PRGRAM sketch $combined_options -o $TMP_D/ref ${ref_files[@]} >>  $TMP_D/run.log 
@@ -177,13 +183,18 @@ $PRGRAM sketch -i $TMP_D/ref >>  $TMP_D/run.log
 #echo "$combined_options"
 #echo "sketches created on $TMP_D"
 
+if [[ -z "$model_file" ]]; then
+  model_file="$PRO_D/ani_models/f8C9O7_model.xgb"
+fi
+
 combined_options=""
 [[ -n "$m_num" ]] && combined_options+="-m${m_num} "
 [[ -n "$o_file" ]] && combined_options+="-o${o_file} "
-
-#echo ">>> estimating ani: $PRGRAM ani $combined_options -r $TMP_D/ref -q $TMP_D/qry"
+[[ -n "$model_file" ]] && combined_options+="-M${model_file}"
+combined_options="${combined_options%% }"
+echo ">>> estimating ani: $PRGRAM ani $combined_options  -r $TMP_D/ref -q $TMP_D/qry"
 printf "\v"
-$PRGRAM ani $combined_options -r $TMP_D/ref -q $TMP_D/qry  
+$PRGRAM ani $combined_options -f0 -n0 -r $TMP_D/ref -q $TMP_D/qry 
 
 rm -r $TMP_D
 

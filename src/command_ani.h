@@ -19,10 +19,11 @@ typedef struct ani_opt
 	char index[PATHLEN];
 	char qrydir[PATHLEN];
 	char refdir[PATHLEN];
-  	char outf[PATHLEN];
+  char outf[PATHLEN];
 	char gl[PATHLEN]; // genome list with selection code 	
-  	int num_remaining_args;
-  	char **remaining_args;
+	char model[PATHLEN];
+  int num_remaining_args;
+  char **remaining_args;
 } ani_opt_t;
 
 typedef struct  {

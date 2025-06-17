@@ -29,6 +29,7 @@ static struct argp_option opt_ani[] =
 	{"ref",'r',"<DIR>", 0, "Path of reference sketches, do not set if need trianlge\v",9},
 	{"query",'q',"<DIR>", 0, "Path of query sketches \v",1},
 	{"index",'i',"<FILE>", 0, "Inverted indexing of combined sketch.\v",2},
+	{"model",'M',"<FILE>", 0, "specify the trained ani model.\v",2},
 	{"outfmt",'m',"<0/1/2>", 0, "print results detail/matrix/triangle (0/1/2) [0]\v",2},
 	{"afcut",'f',"<FLOAT>",0,"When report, Skip alignment fraction < [0.1] \v",3},
   {"anicut",'n',"<FLOAT>",0,"When report, Skip ani < [0.5] \v",3},
@@ -61,6 +62,7 @@ ani_opt_t ani_opt ={
 	.qrydir[0] = '\0',
 	.outf[0] = '\0',
 	.gl[0]= '\0',
+	.model[0] = '\0',
 	.num_remaining_args = 0, //int num_remaining_args; no option arguments num.
 	.remaining_args = NULL //char **remaining_args; no option arguments array.
 };
@@ -105,15 +107,20 @@ static error_t parse_ani(int key, char* arg, struct argp_state* state) {
 			break;
 		}
 	    case 'n':
-        {
+     {
             ani_opt.anicut = atof(arg);
             break;
-        }
+       }
         case 'i':
         {
             strcpy(ani_opt.index, arg);
             break;
         }
+		case 'M':
+		{
+			strcpy(ani_opt.model, arg);
+			break;
+		}
 		case 'q':
 		{
 			strcpy(ani_opt.qrydir, arg);
