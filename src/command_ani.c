@@ -238,7 +238,7 @@ void ani_block_print(int ref_infile_num, int qry_gid_offset, int this_block_size
 			double rel_diff_obj = (double)(MOBJ(ref_infile_num,i,j).diff_obj_section - MOBJ(ref_infile_num,i,j).diff_obj)/MOBJ(ref_infile_num,i,j).diff_obj;
       double ani = sort_idani_block[i][n].ani * 100;
 			double learned_ani = get_learned_ani(XnY_ctx, af_qry, af_ref, dist,ani);
-      fprintf(outfp,"%s\t%s\t%d\t%f\t%f\t%d\t%lf%lf\t%lf\t%lf\n",qryfname[qry_gid],refname[j], XnY_ctx,af_qry,af_ref,MOBJ(ref_infile_num,i,j).diff_obj,rel_diff_obj,dist,ani,learned_ani);
+      fprintf(outfp,"%s\t%s\t%d\t%f\t%f\t%d\t%lf\t%lf\t%lf\t%lf\n",qryfname[qry_gid],refname[j], XnY_ctx,af_qry,af_ref,MOBJ(ref_infile_num,i,j).diff_obj,rel_diff_obj,dist,ani,learned_ani);
     }
   }
 }

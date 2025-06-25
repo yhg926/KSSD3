@@ -6,6 +6,7 @@ show_usage() {
     echo "  -f NUM    Specify sketching rate 1/2^f (numeric, optional)" >&2
     echo "  -C NUM    Specify half length of context (numeric, optional)" >&2
     echo "  -O NUM    Specify half length of object (numeric, optional)" >&2
+	echo "  -I NUM    Specify length of innerobject (numeric, optional)" >&2
     echo "  -m NUM    Specify output format 0:detail 1:matrix (numeric, optional)" >&2
     echo "  -p NUM    Specify p num of threads used (numeric, optional)" >&2
     echo "  -r FILES   Specify ref genome files (string, mandatory)" >&2
@@ -19,7 +20,8 @@ show_usage() {
 # Initialize variables with default empty values
 f_num=8
 C_num=9
-O_num=7
+O_num=3
+I_num=3
 m_num=0
 p_num=8
 o_file=""
@@ -42,10 +44,14 @@ while [[ $# -gt 0 ]]; do
             C_num="$2"
             shift 2
             ;;
-				-O|--O)
+		-O|--O)
             O_num="$2"
             shift 2
-            ;;
+			;;
+		-I|--I)
+			I_num="$2"
+			shift 2 
+           ;;
         -m|--m)
             m_num="$2"
             shift 2
@@ -119,6 +125,7 @@ validate_numeric() {
 validate_numeric "f" "$f_num"
 validate_numeric "C" "$C_num"
 validate_numeric "O" "$O_num"
+validate_numeric "I" "$O_num"
 validate_numeric "m" "$m_num"
 validate_numeric "p" "$p_num"
 
@@ -159,21 +166,22 @@ else
     exit 1
 fi
 
-combined_options=""
-[[ -n "$f_num" ]] && combined_options+="-f${f_num} "
-[[ -n "$C_num" ]] && combined_options+="-C${C_num} "
-[[ -n "$O_num" ]] && combined_options+="-O${O_num} "
-[[ -n "$p_num" ]] && combined_options+="-p${p_num} "
-combined_options="${combined_options%% }"
+sketching_options=""
+[[ -n "$f_num" ]] && sketching_options+="-f${f_num} "
+[[ -n "$C_num" ]] && sketching_options+="-C${C_num} "
+[[ -n "$O_num" ]] && sketching_options+="-O${O_num} "
+[[ -n "$I_num" ]] && sketching_options+="-I${I_num} "
+[[ -n "$p_num" ]] && sketching_options+="-p${p_num} "
+sketching_options="${sketching_options%% }"
 
 
-PRO_D="."
+PRO_D="$HOME/yihuiguang/tools/KSSD3"
 PRGRAM="$PRO_D/bin/kssd3"
 #MODEL_C9O7="$PRO_D/ani_models/f8C9O7_model.xgb"
 TMP_D=$(mktemp -d /tmp/myapp.XXXXXX) 
 
-$PRGRAM sketch $combined_options -o $TMP_D/ref ${ref_files[@]} >>  $TMP_D/run.log 
-$PRGRAM sketch $combined_options -o $TMP_D/qry ${query_files[@]} >>  $TMP_D/run.log
+$PRGRAM sketch $sketching_options -o $TMP_D/ref ${ref_files[@]} >>  $TMP_D/run.log 
+$PRGRAM sketch $sketching_options -o $TMP_D/qry ${query_files[@]} >>  $TMP_D/run.log
 $PRGRAM sketch -i $TMP_D/ref >>  $TMP_D/run.log
 
 # Processing example with optional parameters
@@ -192,6 +200,7 @@ combined_options=""
 [[ -n "$o_file" ]] && combined_options+="-o${o_file} "
 [[ -n "$model_file" ]] && combined_options+="-M${model_file}"
 combined_options="${combined_options%% }"
+echo ">>> sketching options: $sketching_options"
 echo ">>> estimating ani: $PRGRAM ani $combined_options  -r $TMP_D/ref -q $TMP_D/qry"
 printf "\v"
 $PRGRAM ani $combined_options -f0 -n0 -r $TMP_D/ref -q $TMP_D/qry 
