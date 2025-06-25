@@ -81,7 +81,12 @@ inline double get_learned_ani (int XnY_ctx, float af_qry, float af_ref, float di
     else memcpy(coeffs,C9O7_96, sizeof(C9O7_96));
     learned_ani = coeffs[0] + coeffs[1]*XnY_ctx + coeffs[2]*af_qry + coeffs[3]*af_ref + coeffs[4]*dist + coeffs[5]*ani;
 */
-		// xgb model
+		if (ani >= 98 && af_qry > 0.5 && af_ref > 0.5) {
+			learned_ani =  C9O7_98[0] +  C9O7_98[1]*XnY_ctx +  C9O7_98[2]*af_qry +  C9O7_98[3]*af_ref +  C9O7_98[4]*dist +  C9O7_98[5]*ani;
+			if(learned_ani > 100 ) learned_ani = 100;
+			return learned_ani;
+		}
+		// xgb model, when ani < 98
 		float data[5] = {  (float)XnY_ctx, af_qry, af_ref, dist, ani };	
 		//float data[5] = {  17748, 0.995904, 0.995904, 0.000000, 100.000000 };
 		if (dmatrix) XGDMatrixFree(dmatrix); 
@@ -103,7 +108,7 @@ int compare_idani_desc(const void *a, const void *b) {
 }
 #define MCTX(L, X, Y)  (ctx[(size_t)((L)*(X) + (Y))])
 #define MOBJ(L, X, Y)  (obj[(size_t)((L)*(X) + (Y))])
-inline void count_ctx_obj_frm_comb_sketch_section(uint32_t *ctx,uint32_t *obj, ctxgidobj_t *ctxgidobj_arr, size_t ref_sksize, int ref_gnum, int section_gnum, uint64_t *section_sk, uint64_t *section_skidx, uint32_t *num_passid_block, idani_t **sort_idani_block, ani_opt_t *ani_opt){
+inline void count_ctx_obj_frm_comb_sketch_section(uint32_t *ctx,obj_section_t *obj, ctxgidobj_t *ctxgidobj_arr, size_t ref_sksize, int ref_gnum, int section_gnum, uint64_t *section_sk, uint64_t *section_skidx, uint32_t *num_passid_block, idani_t **sort_idani_block, ani_opt_t *ani_opt){
   uint64_t gidmask = UINT64_MAX >> (64-GID_NBITS), objmask = (1UL << Bitslen.obj) - 1;
 #pragma omp parallel for  num_threads(ani_opt->p) schedule(guided)
     for (int i = 0 ; i < section_gnum; i++){
@@ -120,8 +125,14 @@ inline void count_ctx_obj_frm_comb_sketch_section(uint32_t *ctx,uint32_t *obj, c
 
                 for(int d = idx[j];  ; d++){
                     if ((ctxgidobj_arr[d].ctxgid >> Bitslen.gid) != (a[j] >> Bitslen.obj)) break;
-                    uint32_t gid = ctxgidobj_arr[d].ctxgid & gidmask; MCTX(ref_gnum, i, gid)++;
-                    if((a[j] & objmask) != ctxgidobj_arr[d].obj) MOBJ(ref_gnum, i, gid)++;
+                    uint32_t gid = ctxgidobj_arr[d].ctxgid & gidmask; MCTX(ref_gnum, i, gid)++;							
+										uint32_t has_diff_obj = (uint32_t)(a[j] & objmask) ^ ctxgidobj_arr[d].obj;
+                    if(has_diff_obj) {
+											MOBJ(ref_gnum, i, gid).diff_obj++;					 
+							        if (has_diff_obj >> (2*(holen+iolen))) MOBJ(ref_gnum, i, gid).diff_obj_section++;
+											if (has_diff_obj & ((uint32_t)ho_mask_len << (2*iolen))) MOBJ(ref_gnum, i, gid).diff_obj_section++;
+											if (has_diff_obj & ((uint32_t)io_mask_len )) MOBJ(ref_gnum, i, gid).diff_obj_section++;											
+										}	
                 }
         }
         free(idx);
@@ -130,7 +141,7 @@ inline void count_ctx_obj_frm_comb_sketch_section(uint32_t *ctx,uint32_t *obj, c
         	num_passid_block[i] = 0;
         	for(int j = 0; j< ref_gnum;j++){
           	if( (float)MCTX(ref_gnum,i,j)/a_size < ani_opt->afcut) continue;
-          	float dist = (float)MOBJ(ref_gnum,i,j)/MCTX(ref_gnum,i,j) ;
+          	float dist = (float)MOBJ(ref_gnum,i,j).diff_obj/MCTX(ref_gnum,i,j) ;
           	float ani = pow((1-dist), (float)1/(2*holen));
           	if(ani <  ani_opt->anicut) continue;
           	sort_idani_block[i][num_passid_block[i]].id = j;
@@ -164,7 +175,8 @@ int mem_eff_sorted_ctxgidobj_arrXcomb_sortedsketch64(ani_opt_t *ani_opt){
   assert( (fp = fopen(test_get_fullpath(ani_opt->qrydir,combined_sketch_suffix),"rb") ) != NULL) ;
   uint64_t *tmp_ctxobj = malloc(qry_sketch_size * sizeof(uint64_t));
   uint32_t *ctx = malloc( ref_infile_num * block_size * sizeof(uint32_t))  ;
-  uint32_t *obj = malloc( ref_infile_num * block_size * sizeof(uint32_t))  ;
+ // uint32_t *obj = malloc( ref_infile_num * block_size * sizeof(uint32_t))  ;
+	obj_section_t *obj = malloc( ref_infile_num * block_size * sizeof(obj_section_t))  ;
 //for order id by descending ani
   uint32_t *num_passid_block = malloc(block_size * sizeof(uint32_t));
   idani_t **sort_idani_block = malloc(block_size * sizeof(idani_t*));
@@ -182,7 +194,7 @@ int mem_eff_sorted_ctxgidobj_arrXcomb_sortedsketch64(ani_opt_t *ani_opt){
 		for(int i = 0;i < ref_infile_num;i++) fprintf(outfp, "\t%s",refname[i]);
 		fprintf(outfp,"\n");
 	}
-	else fprintf(outfp,"Qry\tRef\tXnY_ctx\tQry_align_fraction\tRef_align_fraction\tco-distance\tANI\tlearned_ANI(if > 0)\n");
+	else fprintf(outfp,"Qry\tRef\tXnY_ctx\tQry_align_fraction\tRef_align_fraction\tN_diff_obj\tRel_diff_objsection\tco-distance\tANI\tlearned_ANI(if > 0)\n");
 
   for( int b = 0; b <= qry_infile_num/block_size ; b++){
 
@@ -193,7 +205,7 @@ int mem_eff_sorted_ctxgidobj_arrXcomb_sortedsketch64(ani_opt_t *ani_opt){
     assert(this_sketch_size == read_sketch_size);
 
     memset(ctx,0,ref_infile_num * block_size * sizeof(uint32_t));
-    memset(obj,0,ref_infile_num * block_size * sizeof(uint32_t));
+    memset(obj,0,ref_infile_num * block_size * sizeof(obj_section_t)); //memset(obj,0,ref_infile_num * block_size * sizeof(uint32_t));
     count_ctx_obj_frm_comb_sketch_section(ctx,obj,sortedcomb_ctxgid64obj32, ref_sketch_size, ref_infile_num, this_block_size, tmp_ctxobj, this_sketch_index, num_passid_block,sort_idani_block,ani_opt);
     if(ani_opt->fmt)  ani_block_print_matrix (ref_infile_num,  b*block_size,  this_block_size, qry_sketch_index, ctx, obj,qryname,outfp, ani_opt);
 		else ani_block_print(ref_infile_num, b*block_size,this_block_size,ref_sketch_index,qry_sketch_index,ctx,obj, refname,qryname,num_passid_block,sort_idani_block,outfp);
@@ -210,7 +222,7 @@ int mem_eff_sorted_ctxgidobj_arrXcomb_sortedsketch64(ani_opt_t *ani_opt){
   return ctxgidobj_arr_fsize;
 }
 
-void ani_block_print(int ref_infile_num, int qry_gid_offset, int this_block_size, uint64_t *ref_sketch_index, uint64_t *qry_sketch_index, uint32_t *ctx, uint32_t *obj,char (*refname)[PATHLEN], char (*qryfname)[PATHLEN],uint32_t *num_passid_block, idani_t **sort_idani_block, FILE *outfp ){
+void ani_block_print(int ref_infile_num, int qry_gid_offset, int this_block_size, uint64_t *ref_sketch_index, uint64_t *qry_sketch_index, uint32_t *ctx, obj_section_t *obj,char (*refname)[PATHLEN], char (*qryfname)[PATHLEN],uint32_t *num_passid_block, idani_t **sort_idani_block, FILE *outfp ){
 
   for(int i=0; i< this_block_size; i++){
     int qry_gid = qry_gid_offset + i;
@@ -222,15 +234,16 @@ void ani_block_print(int ref_infile_num, int qry_gid_offset, int this_block_size
       float af_qry = (float)XnY_ctx / qry_sketch_size ;
       int ref_sketch_size = ref_sketch_index[j+1] - ref_sketch_index[j];
       float af_ref = (float)XnY_ctx / ref_sketch_size ;
-      double dist = (double)MOBJ(ref_infile_num,i,j)/XnY_ctx;
+      double dist = (double)MOBJ(ref_infile_num,i,j).diff_obj/XnY_ctx;
+			double rel_diff_obj = (double)(MOBJ(ref_infile_num,i,j).diff_obj_section - MOBJ(ref_infile_num,i,j).diff_obj)/MOBJ(ref_infile_num,i,j).diff_obj;
       double ani = sort_idani_block[i][n].ani * 100;
 			double learned_ani = get_learned_ani(XnY_ctx, af_qry, af_ref, dist,ani);
-      fprintf(outfp,"%s\t%s\t%d\t%f\t%f\t%lf\t%lf\t%lf\n",qryfname[qry_gid],refname[j], XnY_ctx,af_qry,af_ref,dist,ani,learned_ani);
+      fprintf(outfp,"%s\t%s\t%d\t%f\t%f\t%d\t%lf%lf\t%lf\t%lf\n",qryfname[qry_gid],refname[j], XnY_ctx,af_qry,af_ref,MOBJ(ref_infile_num,i,j).diff_obj,rel_diff_obj,dist,ani,learned_ani);
     }
   }
 }
 
-void ani_block_print_matrix (int ref_infile_num, int qry_gid_offset, int this_block_size, uint64_t *qry_sketch_index, uint32_t *ctx, uint32_t *obj,char (*qryfname)[PATHLEN],FILE *outfp,ani_opt_t *ani_opt){
+void ani_block_print_matrix (int ref_infile_num, int qry_gid_offset, int this_block_size, uint64_t *qry_sketch_index, uint32_t *ctx, obj_section_t *obj,char (*qryfname)[PATHLEN],FILE *outfp,ani_opt_t *ani_opt){
 	for(int i=0; i< this_block_size; i++){
 		int qry_gid = qry_gid_offset + i;
     int qry_sketch_size = qry_sketch_index[qry_gid+1] - qry_sketch_index[qry_gid];		
@@ -241,7 +254,7 @@ void ani_block_print_matrix (int ref_infile_num, int qry_gid_offset, int this_bl
 			float af_qry = (float)XnY_ctx / qry_sketch_size;
 			if ( af_qry < ani_opt->afcut) ani = ani_opt->e;
 			else{
-				double dist = (double)MOBJ(ref_infile_num,i,j)/XnY_ctx;
+				double dist = (double)MOBJ(ref_infile_num,i,j).diff_obj/XnY_ctx;
 				ani = pow((1-dist), (float)1/(2*holen)) * 100;	
 				if ( af_qry < ani_opt->ani) ani = ani_opt->e;
 			}
