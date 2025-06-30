@@ -1,3 +1,4 @@
+#!/usr/bin/perl
 use warnings;
 use diagnostics;
 die"*.pl <pair_distance.list> <sepcies number>" if @ARGV!=2;

@@ -1,0 +1,7 @@
+bin/
+obj/
+# Ignore compiled executables in test directory
+/test/*
+# But keep source files
+!/test/*.c
+!/test/*.rs

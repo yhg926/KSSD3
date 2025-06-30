@@ -125,7 +125,7 @@ validate_numeric() {
 validate_numeric "f" "$f_num"
 validate_numeric "C" "$C_num"
 validate_numeric "O" "$O_num"
-validate_numeric "I" "$O_num"
+validate_numeric "I" "$I_num"
 validate_numeric "m" "$m_num"
 validate_numeric "p" "$p_num"
 

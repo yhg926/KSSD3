@@ -1,3 +1,4 @@
+#!/usr/bin/perl
 use diagnostics;
 use warnings;
 die"*.pl <outtree/outfile>" if @ARGV != 1;
