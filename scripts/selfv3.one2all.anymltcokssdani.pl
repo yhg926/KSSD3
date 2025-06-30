@@ -1,3 +1,4 @@
+#!/usr/bin/perl
 use warnings;
 use diagnostics;
 use Digest::MurmurHash3 qw( murmur32 );
