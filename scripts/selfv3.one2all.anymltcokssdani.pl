@@ -6,17 +6,17 @@ if(@ARGV < 2){
 	die "*.pl <query.fa> <ref1.fa> <ref2.fa> ...";
 }
 
-$UnitCL =  20; #20 is best
+$UnitCL =  9; #20 is best
 $UnitOL = 6; #16 is best
 $UnitL = $UnitCL + $UnitOL ;
-$UnitN = 1;  # 1 is best
+$UnitN = 2;  # 1 is best
 $CTX = $UnitCL * $UnitN;
 $TL = $UnitL*$UnitN + $UnitOL ;
 #@nuqcount = (0) x @ARGV ;
 
 $/ = '>';
 for ($n=0 ; $n<@ARGV;$n++) {
-	open $f, $ARGV[$n] || die "can't open $ARGV[$n]:$! ";
+	open ($f, $ARGV[$n] )|| die "can't open $ARGV[$n]:$! ";
 	<$f>;
 
 	while($seq=<$f>){
@@ -85,22 +85,35 @@ for ($n=0 ; $n<@ARGV;$n++) {
 		$num_j = 0 ;
 		$num_ctx = 0;
 		$diff_obj  = 0;
+		$diff_obj_UnitN = 0;
+
 		foreach $ele (keys %{$hash[$j]}){
 			$num_j++;
 			if( exists $hash[$n]->{$ele}  ){
-				$num_ctx++; 			
-				if ( !exists $hash[$j]->{$ele}->{$hash[$n]->{$ele}} ){
+				$num_ctx++;
+#new 20250621
+				@objs = keys %{$hash[$j]->{$ele}};	
+				next if @objs > 1;	
+				$obj_ref = $hash[$n]->{$ele};
+				$obj_qry = $objs[0];	
+
+				if ($obj_qry ne $obj_ref){
 					$diff_obj++;
-				}
+					for ($p = 0; $p < $UnitOL*$UnitN + 1 ; $p+=$UnitOL ){
+						$diff_obj_UnitN++  if substr($obj_ref,$p,$UnitOL) ne substr($obj_qry,$p,$UnitOL);
+					}
+				#if ( !exists $hash[$j]->{$ele}->{$hash[$n]->{$ele}} ){
+				#	$diff_obj++;
+				#}
 			}
 		}
-		print $ARGV[$n],"\t", $ARGV[$j],"\t",$num_n,"\t",$num_n_self_diff,"\t",$num_j,"\t",$num_ctx,"\t",$diff_obj,"\t";
+	}
+		print $ARGV[$n],"\t", $ARGV[$j],"\t",$num_n,"\t",$num_n_self_diff,"\t",$num_j,"\t",$num_ctx,"\t",$diff_obj,"\t",$diff_obj_UnitN,"\t";
 		if($num_ctx == 0) {
-			print "nan\tnan\tnan\t0\t0\n";
+			print "0\t0\tnan\tnan\n";
 		}
 		else {
-			print $diff_obj / $num_ctx,"\t", $diff_obj / (($TL-$CTX)*$num_ctx),"\t", (1-$diff_obj / ($num_ctx))**(1/($TL-$CTX)),"\t", (1-$diff_obj / ( $diff_obj + $num_ctx))**(1/($TL-$CTX)),"\t", 1 - $diff_obj / ( $diff_obj+$num_ctx),"\t", $num_ctx/$num_n,"\t", $num_ctx/$num_j,"\n" ; 
-#			print  $diff_obj / $num_ctx, "\t", $diff_obj3p / $num_ctx, "\t",  $diff_obj5p / $num_ctx, "\t",1 - ($diff_obj3p+$diff_obj5p + $diff_obj) / (3*$num_ctx),"\t", 1 - ($diff_obj3p+$diff_obj5p) / (2*$num_ctx), "\t",1 -  ($diff_obj3p+$diff_obj5p) / ( $diff_obj3p+$diff_obj5p + 2*$num_ctx), "\t",1 -  ($diff_obj3p+$diff_obj5p) / ( $diff_obj3p+$diff_obj5p + $num_ctx), "\t", $num_ctx/$num_n,"\t",  $num_ctx/$num_j,"\n" ; 
+			print  $num_ctx/$num_n,"\t", $num_ctx/$num_j,"\t", $diff_obj / $num_ctx,"\t", (1-$diff_obj / ($num_ctx))**(1/($TL-$CTX)),"\n" ; 
 	 }
 	}
 
