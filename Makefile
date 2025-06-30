@@ -19,15 +19,37 @@ all: $(TARGET); \
     echo "👉 If you haven’t already, run: make install_env to set LD_LIBRARY_PATH for libxgboost"
 
 SRCS := $(wildcard $(SRCDIR)/*.c)
-OBJS := $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(SRCS))
+
+# objects that rely on XGBoost
+XGB_SRCS := $(SRCDIR)/command_ani.c
+XGB_OBJS := $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(XGB_SRCS))
+
+# sources requiring klib headers
+KLIB_SRCS := $(SRCDIR)/command_ani.c \
+             $(SRCDIR)/command_composite.c \
+             $(SRCDIR)/command_matrix.c \
+             $(SRCDIR)/command_operate.c \
+             $(SRCDIR)/command_sketch.c \
+             $(SRCDIR)/kssdlib_sort.c
+KLIB_OBJS := $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(KLIB_SRCS))
+
+# objects that do not need XGBoost or klib
+GEN_SRCS := $(filter-out $(KLIB_SRCS),$(SRCS))
+GEN_OBJS := $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(GEN_SRCS))
+
+OBJS := $(GEN_OBJS) $(KLIB_OBJS)
 
 $(TARGET): $(OBJS); \
     mkdir -p $(BINDIR); \
-    $(CC) $(CFLAGS) $^ -o $@ -L$(XGB_LIB) -lxgboost -lz -lm
+    $(CC) $(CFLAGS) $^ -o $@ $(if $(XGB_OBJS),-L$(XGB_LIB) -lxgboost,) -lz -lm
+
+
+$(KLIB_OBJS): CFLAGS += -Iklib
+$(XGB_OBJS): CFLAGS += -I$(XGB_INCLUDE)
 
 $(OBJDIR)/%.o: $(SRCDIR)/%.c; \
     mkdir -p $(OBJDIR); \
-    $(CC) $(CFLAGS) -Iklib -I$(XGB_INCLUDE) -c $< -o $@
+    $(CC) $(CFLAGS) -c $< -o $@
 
 clean:; rm -f $(TARGET) $(OBJS)
 
