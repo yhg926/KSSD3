@@ -243,6 +243,17 @@ int seq2sortedsketch64 (char* seqfname, char * outfname, bool abundance, int n )
 
 #include <x86intrin.h>
 #include <sys/mman.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#ifndef MAP_POPULATE
+#define MAP_POPULATE 0
+#endif
+#ifndef MAP_ANONYMOUS
+#define MAP_ANONYMOUS 0x20
+#endif
+#include <bits/mman-linux.h>
 
 #define CACHE_ALIGN __attribute__((aligned(64)))
 #define BATCH_SIZE (4 << 20)    // 4MB批量处理
