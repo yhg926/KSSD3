@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -std=gnu11 -Wno-format-overflow -Wno-unused-result -O3 -ggdb -mavx2 -mbmi2 -fopenmp -march=native
+CFLAGS = -std=gnu11 -Wno-format-overflow -Wno-unused-result -O3 -flto -ggdb -mavx2 -mbmi2 -fopenmp -march=native
 
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 SRCDIR := $(ROOT)/src

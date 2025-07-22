@@ -133,6 +133,7 @@ typedef struct dim_sketch_stat
 {
   uint32_t hash_id; // sketching type coding
   bool koc;
+  int coden_len; // Num of coden in the coden ctxobj pattern
   int klen; // full length of kmer, 8..31
   int hclen; // half context length,
   int holen; // half outer object length, 1..64

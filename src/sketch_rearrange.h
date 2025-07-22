@@ -22,11 +22,13 @@ extern bitslen_t Bitslen;
 typedef struct {uint64_t ctx; uint32_t gid; uint32_t obj;} tmp_ctxgidobj_t;
 
 void const_comask_init(dim_sketch_stat_t *lco_stat_val );
-void sketch64_2ctxobj64 (uint64_t *sketch_index, uint64_t *sketch64, int infile_num,  uint32_t arrlen, int klen, int hclen, int holen );
-uint96_t* sketch64_2uint96co(uint64_t *sketch_index, uint64_t *sketch64, int infile_num,  uint32_t arrlen, int klen, int hclen, int holen );
-ctxgidobj_t* ctxobj64_2ctxgidobj(uint64_t *sketch_index, uint64_t *ctxobj64, int infile_num,  uint32_t arrlen, int klen, int hclen, int holen );
-uint64_t * kmer_arr2regco(uint64_t *array, uint32_t arrlen, int klen, int hclen, int holen);
 
+ctxgidobj_t *ctxobj64_2ctxgidobj(uint64_t *sketch_index, uint64_t *ctxobj64, int infile_num, uint32_t arrlen);
+
+//other versions of the functions are ignored
+//void sketch64_2ctxobj64(uint64_t *sketch64, uint32_t arrlen);
+//uint96_t *sketch64_2uint96co(uint64_t *sketch_index, uint64_t *sketch64, int infile_num, uint32_t arrlen);
+//uint64_t * kmer_arr2regco(uint64_t *array, uint32_t arrlen, int klen, int hclen, int holen);
 //inline declarations:
 //inline obj_t extract_outobj_frm_kmer64 (uint64_t kmer, int klen, int holen);
 //inline uint96_t concat_lower_bits( tmp_ctxgidobj_t *tmp_ctxgidobj, bitslen_t bitslen);
@@ -92,10 +94,53 @@ static inline uint96_t uint64_kmer2uint96(uint64_t unituple,uint32_t gid){
 
 static inline ctxgidobj_t uint64_ctxobj2ctxgidobj96( uint64_t ctxobj64, uint32_t gid,uint64_t obj_len_mask){
 	ctxgidobj_t ctxgidobj;
-	ctxgidobj.ctxgid = (ctxobj64 >> 2*( 2*holen + iolen) << GID_NBITS) | (gid & gid_mask );
+	ctxgidobj.ctxgid = (ctxobj64 >> Bitslen.obj << GID_NBITS) | (gid & gid_mask );
 	ctxgidobj.obj = ctxobj64 & obj_len_mask ;
 	return ctxgidobj;
 }
+
+
+
+//coden aware context object pattern 
+#ifndef NUM_CODENS
+#define NUM_CODENS 9
+#endif   
+static inline uint64_t generate_coden_pattern64 (){
+    uint64_t pattern = 0;
+    for (int i = 0; i < NUM_CODENS; ++i) {
+        pattern <<= 6;
+        pattern |= 0b111100;    
+    }
+    return pattern;
+}
+// Reorders a right-aligned pattern: 00_111100 x NUM_CODENS
+// Each block = [high4][low2] -> 6 bits
+// Pattern occupies lowest (6 * NUM_BLOCKS + 2) bits
+static inline uint64_t reorder_unituple_by_coden_pattern64 (uint64_t unituple) {
+    uint64_t high = 0, low = 0; 
+    // Extracr each 6-bits block (starting from bit offset 0)
+    #pragma unroll
+    for (int i = 0; i < NUM_CODENS; ++i) {
+        const int bit_offset = 6 * i;
+        uint64_t block = (unituple >> bit_offset) & 0x3F; // Extract 6 bits
+        uint64_t hbits = (block >> 2) & 0xF;
+        uint64_t lbits = block & 0x3;
+        high = (high << 4) | hbits; // Shift high bits
+        low = (low << 2) | lbits; // Shift low bits
+    }
+    return (high <<(64-(4*NUM_CODENS))) | low; // Combine high and low parts
+}
+
+
+typedef uint64_t (*uint64kmer2generic_ctxobj_fn)(uint64_t); 
+extern uint64kmer2generic_ctxobj_fn uint64kmer2generic_ctxobj;
+void set_uint64kmer2generic_ctxobj(bool is_coden_ctxobj_pattern);
+
+
+
+
+
+
 
 
 

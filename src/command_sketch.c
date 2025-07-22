@@ -37,7 +37,7 @@ void public_vars_init(dim_sketch_stat_t* sketch_stat_raw){
 
 void compute_sketch(sketch_opt_t *sketch_opt_val, infile_tab_t *infile_stat)
 {
-
+    set_uint64kmer2generic_ctxobj(sketch_opt_val->coden_ctxobj_pattern);
     if (sketch_opt_val->split_mfa)
     { // mfa files parse
         mfa2sortedctxobj64(sketch_opt_val, infile_stat);
@@ -127,7 +127,7 @@ void gen_inverted_index4comblco(const char *refdir)
         err(EXIT_FAILURE, "%s(): genome numer %d exceed maximum:%u", __func__, ref_result->infile_num, 1 << GID_NBITS);
     if (GID_NBITS + 4 * hclen > 64)
         err(EXIT_FAILURE, "%s(): context_bits_len(%d)+gid_bits_len(%d) exceed 64", __func__, 4 * hclen, GID_NBITS);
-    ctxgidobj_t *ctxgidobj = ctxobj64_2ctxgidobj(ref_result->sketch_index, ref_result->comb_sketch, ref_result->infile_num, sketch_size, klen, hclen, holen);
+    ctxgidobj_t *ctxgidobj = ctxobj64_2ctxgidobj(ref_result->sketch_index, ref_result->comb_sketch, ref_result->infile_num, sketch_size);
     free_unify_sketch(ref_result);
     ctxgidobj_sort_array(ctxgidobj, sketch_size);
     // printf("sketch_size=%lu\t%d\t%d\n",sizeof(ctxgidobj[0]),sizeof(ctxgidobj_t),sketch_size);
@@ -183,7 +183,7 @@ int seq2ht_sortedctxobj64(char *seqfname, char *outfname, bool abundance, int n)
             if (SKETCH_HASH(unictx) > FILTER)
                 continue;
             int ret;
-            khint_t key = kh_put(sort64, h, uint64_kmer2ctxobj(unituple), &ret);
+            khint_t key = kh_put(sort64, h, uint64kmer2generic_ctxobj(unituple), &ret);
 
             if (ret)
             {
@@ -250,7 +250,7 @@ int seq2sortedsketch64(char *seqfname, char *outfname, bool abundance, int n)
             if (SKETCH_HASH(unictx) > FILTER)
                 continue;
 
-            unituple = uint64_kmer2ctxobj(unituple);
+            unituple = uint64kmer2generic_ctxobj(unituple);
             vector_push(&raw_sketch, &unituple);
 
         } // for line
@@ -413,7 +413,7 @@ int opt_seq2sortedsketch64(char *seqfname, char *outfname, bool abundance, int n
                         uint64_t mask_tuple = current_tuple & ctxmask_local;
                         uint64_t mask_crvstuple = current_crvstuple & ctxmask_local;
                         uint64_t unituple = (mask_tuple < mask_crvstuple) ? current_tuple : current_crvstuple;
-                        unituple = uint64_kmer2ctxobj(unituple);
+                        unituple = uint64kmer2generic_ctxobj(unituple);
 
                         // 哈希过滤
                         uint64_t unictx = unituple & ctxmask_local;
@@ -480,7 +480,7 @@ int opt_seq2sortedsketch64(char *seqfname, char *outfname, bool abundance, int n
                         vector_reserve(&raw_sketch, max_sketch);
                     }
                     uint64_t *dst = (uint64_t *)raw_sketch.data + raw_sketch.size++;
-                    *dst = uint64_kmer2ctxobj(unituple);
+                    *dst = uint64kmer2generic_ctxobj(unituple);
                 }
             }
             tuple = new_tuple;
@@ -606,7 +606,7 @@ int opt2_seq2sortedsketch64(char *seqfname, char *outfname, bool abundance, int 
                 const uint64_t unituple = (masked_tuple < masked_crvstuple) ? new_tuple : new_crvstuple;
 
                 // 优化8：批量写入
-                batch_sketch[batch_count++] = uint64_kmer2ctxobj(unituple) & tupmask_local;
+                batch_sketch[batch_count++] = uint64kmer2generic_ctxobj(unituple) & tupmask_local;
 
                 // 批量提交
                 if (batch_count == BATCH_PROCESS_SIZE)
@@ -799,7 +799,7 @@ void mfa2sortedctxobj64(sketch_opt_t *sketch_opt_val, infile_tab_t *infile_stat)
                 if (SKETCH_HASH(unictx) > FILTER)
                     continue;
                 int ret;
-                khint_t key = kh_put(sort64, h, uint64_kmer2ctxobj(unituple), &ret);
+                khint_t key = kh_put(sort64, h, uint64kmer2generic_ctxobj(unituple), &ret);
 
                 if (ret)
                     kh_value(h, key) = 1;
@@ -832,6 +832,7 @@ void mfa2sortedctxobj64(sketch_opt_t *sketch_opt_val, infile_tab_t *infile_stat)
 
 void read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val, infile_tab_t *infile_stat, int batch_size)
 {
+ //   printf("%lx\n", ctxmask);    
     uint32_t len_mv = 2 * klen - 2;
     uint64_t *sketch_index = calloc(infile_stat->infile_num + 1, sizeof(uint64_t));
     int *gseq_nums = calloc(batch_size + 1, sizeof(int));
@@ -876,8 +877,7 @@ void read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val, infile_tab_t 
             {
                 char *s = *(char **)vector_get(&all_reads, j);
                 int len = strlen(s);
-                if (len < klen)
-                    continue;
+                if (len < klen) continue;
                 int base = 0;
                 uint64_t tuple, crvstuple, unituple, basenum, unictx;
                 for (int pos = 0; pos < len; pos++)
@@ -890,16 +890,16 @@ void read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val, infile_tab_t 
                     basenum = Basemap[(unsigned short)s[pos]];
                     tuple = ((tuple << 2) | basenum);
                     crvstuple = ((crvstuple >> 2) | ((basenum ^ 3LLU) << len_mv));
-                    if (++base < klen)
-                        continue;
+                    if (++base < klen) continue;
 
                     unituple = (tuple & ctxmask) < (crvstuple & ctxmask) ? tuple : crvstuple;
                     unictx = unituple & ctxmask;
+                    //printf("%lx\t%lx\t%lx\t%lx\t%lx\t%lx\n", unituple, unictx, tuple,tuple & ctxmask, crvstuple, crvstuple & ctxmask);
                     if (SKETCH_HASH(unictx) > FILTER)
                         continue;
 
                     int ret;
-                    khint_t key = kh_put(sort64, h, uint64_kmer2ctxobj(unituple), &ret);
+                    khint_t key = kh_put(sort64, h, uint64kmer2generic_ctxobj(unituple & tupmask), &ret);
                     if (ret)
                         kh_value(h, key) = 1;
                 } // nt pos loop
