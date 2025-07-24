@@ -412,6 +412,33 @@ void filter_n_SortedKV_Arrays(SortedKV_Arrays_t *result, uint32_t n){
   }
 	result->len	= kmer_ct;
 }
+
+void remove_ctx_with_conflict_obj (SortedKV_Arrays_t *data, uint32_t n_obj_bits) {
+    if (data->len == 0) return;
+    size_t write_idx = 0,i = 0;
+
+    while (i < data->len) {
+        size_t count = 1;
+        // Efficient high-bit comparison using XOR+shift
+        while (i + count < data->len &&
+               ((data->keys[i] ^ data->keys[i + count]) >> n_obj_bits) == 0) {
+            count++;
+        }
+
+        if (count == 1) {
+            if (write_idx != i) {
+                data->keys[write_idx]   = data->keys[i];
+                data->values[write_idx] = data->values[i];
+            }
+            write_idx++;
+        }
+
+        i += count;  // Skip current group
+    }
+
+    data->len = write_idx;
+}
+
 /*
 void free_SortedKV_Arrays (SortedKV_Arrays_t result){
 	free(result.keys);

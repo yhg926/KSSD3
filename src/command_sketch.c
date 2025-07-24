@@ -36,7 +36,7 @@ void public_vars_init(dim_sketch_stat_t* sketch_stat_raw){
 */
 
 void compute_sketch(sketch_opt_t *sketch_opt_val, infile_tab_t *infile_stat)
-{
+{   
     set_uint64kmer2generic_ctxobj(sketch_opt_val->coden_ctxobj_pattern);
     if (sketch_opt_val->split_mfa)
     { // mfa files parse
@@ -44,6 +44,8 @@ void compute_sketch(sketch_opt_t *sketch_opt_val, infile_tab_t *infile_stat)
         return;
     }
     read_genomes2mem2sortedctxobj64(sketch_opt_val, infile_stat, 1000);
+    return; 
+    // 20150724: i am not sure if below code is still needed, since we have read_genomes2mem2sortedctxobj64() to handle all cases
     // normal sketching mode
     uint64_t *tmp_ct_list = calloc(infile_stat->infile_num + 1, sizeof(uint64_t));
 #pragma omp parallel for num_threads(sketch_opt_val->p) schedule(guided)
@@ -906,6 +908,8 @@ void read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val, infile_tab_t 
                 free(s);
             } // seq j loop
             SortedKV_Arrays_t lco_ab = sort_khash_u64(h);
+            // remove context with conflict object
+            remove_ctx_with_conflict_obj(&lco_ab, Bitslen.obj);
             // may filter n for lco_ab
             batch_sketches[i] = lco_ab.keys;
             sketch_index[infile_num_p - num + i + 2] = lco_ab.len;
@@ -923,12 +927,11 @@ void read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val, infile_tab_t 
         vector_free(&all_reads);
         vector_init(&all_reads, sizeof(char *));
 
-        printf("\r%d/%d genome proceed", infile_num_p, infile_stat->infile_num);
+        printf("\r%d/%d genome proceed\n", infile_num_p, infile_stat->infile_num);
 
     } // infile_num_p loop
 
-    for (int i = 0; i < infile_stat->infile_num; i++)
-        sketch_index[i + 1] += sketch_index[i];
+    for (int i = 0; i < infile_stat->infile_num; i++) sketch_index[i + 1] += sketch_index[i];
     write_to_file(format_string("%s/%s", sketch_opt_val->outdir, idx_sketch_suffix), sketch_index, (infile_stat->infile_num + 1) * sizeof(sketch_index[0]));
 
     fclose(comb_sketch_fp);
