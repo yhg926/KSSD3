@@ -113,6 +113,22 @@ static inline uint64_t generate_coden_pattern64 (){
     }
     return pattern;
 }
+
+// in case need to recovery unituple or k-mer from coden pattern 
+static inline uint64_t reverse_reorder_unituple_by_coden_pattern64 (uint64_t value){
+    uint64_t unituple = value & 0x3;
+    uint64_t high = value >> (2 * (NUM_CODENS + 1));
+ 
+    #pragma unroll
+    for (int i = 0; i < NUM_CODENS; ++i) {
+        unituple = (unituple << 4) | (high & 0xF);
+        value >>= 2;
+        unituple = (unituple << 2) | (value & 0x3);
+        high >>= 4;
+    }
+    return unituple;
+}  
+
 // Reorders a right-aligned pattern: 00_111100 x NUM_CODENS
 // Each block = [high4][low2] -> 6 bits
 // Pattern occupies lowest (6 * NUM_BLOCKS + 2) bits

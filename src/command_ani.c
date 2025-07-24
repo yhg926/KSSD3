@@ -160,8 +160,7 @@ inline void count_ctx_obj_frm_comb_sketch_section(ctx_mut2_t *ctx, obj_section_t
 					}				
 					MOBJ(ref_gnum, i, gid).diff_obj_section += num_diff_obj_section;
 					if(num_diff_obj_section >1 ) MCTX(ref_gnum, i, gid).num_mut2_ctx++;		
-	printf("%lx\t%lx\t%lx\t%d\n", a[j]>> Bitslen.obj, (uint32_t)(a[j] & objmask), ctxgidobj_arr[d].obj,num_diff_obj_section);
-		
+//	printf("%lx\t%lx\t%lx\t%d\n", a[j]>> Bitslen.obj, (uint32_t)(a[j] & objmask), ctxgidobj_arr[d].obj,num_diff_obj_section);		
 				}
 			}
 		}
