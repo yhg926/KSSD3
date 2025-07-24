@@ -117,18 +117,17 @@ static inline uint64_t generate_coden_pattern64 (){
 // Each block = [high4][low2] -> 6 bits
 // Pattern occupies lowest (6 * NUM_BLOCKS + 2) bits
 static inline uint64_t reorder_unituple_by_coden_pattern64 (uint64_t unituple) {
-    uint64_t high = 0, low = 0; 
-    // Extracr each 6-bits block (starting from bit offset 0)
+// need reorder NUM_CODENS of blocks high (to ctx) and NUM_CODENS + 1 of blocks low (to obj)
+    uint64_t high = 0, low = unituple & 0x3; 
     #pragma unroll
     for (int i = 0; i < NUM_CODENS; ++i) {
-        const int bit_offset = 6 * i;
-        uint64_t block = (unituple >> bit_offset) & 0x3F; // Extract 6 bits
-        uint64_t hbits = (block >> 2) & 0xF;
-        uint64_t lbits = block & 0x3;
-        high = (high << 4) | hbits; // Shift high bits
-        low = (low << 2) | lbits; // Shift low bits
+     
+        unituple >>= 2;
+        high = (high << 4) | unituple & 0xF;
+        unituple >>= 4;
+        low = (low << 2) | (unituple & 0x3);
     }
-    return (high <<(64-(4*NUM_CODENS))) | low; // Combine high and low parts
+    return (high << 2*(NUM_CODENS+1)) | low; // Combine high and low parts
 }
 
 

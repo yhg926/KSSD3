@@ -128,6 +128,7 @@ int compare_idani_desc(const void *a, const void *b)
 #define MOBJ(L, X, Y) (obj[(size_t)((L) * (X) + (Y))])
 inline void count_ctx_obj_frm_comb_sketch_section(ctx_mut2_t *ctx, obj_section_t *obj, ctxgidobj_t *ctxgidobj_arr, size_t ref_sksize, int ref_gnum, int section_gnum, uint64_t *section_sk, uint64_t *section_skidx, uint32_t *num_passid_block, idani_t **sort_idani_block, ani_opt_t *ani_opt)
 {
+//	printf("%d\n",Bitslen.obj/2); exit(0);
 	uint64_t gidmask = UINT64_MAX >> (64 - GID_NBITS), objmask = (1UL << Bitslen.obj) - 1;
 #pragma omp parallel for num_threads(ani_opt->p) schedule(guided)
 	for (int i = 0; i < section_gnum; i++)
@@ -139,11 +140,11 @@ inline void count_ctx_obj_frm_comb_sketch_section(ctx_mut2_t *ctx, obj_section_t
 
 		for (int j = 0; j < a_size; j++)
 		{
+			if (idx[j] == SIZE_MAX) continue;
 			// Skip when no findings, or conflict objects (adjacent elements with the same context)
-			if ((idx[j] == SIZE_MAX) || (j > 0 && (a[j] >> Bitslen.obj) == (a[j - 1] >> Bitslen.obj)) ||
-				(j < a_size - 1 && (a[j] >> Bitslen.obj) == (a[j + 1] >> Bitslen.obj)))
-				continue;
-
+			//if ((j > 0 && (a[j] >> Bitslen.obj) == (a[j - 1] >> Bitslen.obj)) ||
+			//	(j < a_size - 1 && (a[j] >> Bitslen.obj) == (a[j + 1] >> Bitslen.obj)))
+			//	continue;
 			for (int d = idx[j];; d++)
 			{
 				if ((ctxgidobj_arr[d].ctxgid >> Bitslen.gid) != (a[j] >> Bitslen.obj)) break;
@@ -158,7 +159,9 @@ inline void count_ctx_obj_frm_comb_sketch_section(ctx_mut2_t *ctx, obj_section_t
 						if (has_diff_obj & (3U << (2 * k))) num_diff_obj_section++ ;
 					}				
 					MOBJ(ref_gnum, i, gid).diff_obj_section += num_diff_obj_section;
-					if(num_diff_obj_section >1 ) MCTX(ref_gnum, i, gid).num_mut2_ctx++;				
+					if(num_diff_obj_section >1 ) MCTX(ref_gnum, i, gid).num_mut2_ctx++;		
+	printf("%lx\t%lx\t%lx\t%d\n", a[j]>> Bitslen.obj, (uint32_t)(a[j] & objmask), ctxgidobj_arr[d].obj,num_diff_obj_section);
+		
 				}
 			}
 		}
@@ -644,8 +647,7 @@ void sorted_ctxgidobj_arrXcomb_sortedsketch64(unify_sketch_t *qry_result, ctxgid
 				uint32_t gid = ctxgidobj_arr[d].ctxgid & gidmask;
 				if (gid > rn || (ctxgidobj_arr[d].ctxgid >> Bitslen.gid) != (a[i] >> Bitslen.obj))
 					break;
-				CTX(rn, gid)
-				++;
+				CTX(rn, gid)++;
 				if ((a[i] & objmask) != ctxgidobj_arr[d].obj) // wrong: if(a[i] & objmask != ctxgidobj_arr[d].obj) ...
 					OBJ(rn, gid)
 					++;
