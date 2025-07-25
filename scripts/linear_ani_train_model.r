@@ -1,36 +1,9 @@
 setwd("/mnt/sdb/data/kssd3ani_project/ANIu_vs_kssd3/same_species")
-#read in data
-#dataset1<-read.table("Neisseria_meningitidis14.pkssd14_vs_ANIu")
-#dataset2<-read.table("Kingella_kingae14.pkssd14_vs_ANIu")
-Nayfach<-read.table("Nayfach52k14.pkssd14_vs_ANIm")
-nrow(Nayfach)
-Nayfach<-Nayfach[,c(3:10)]
-header=c("X_size","N_conflict", "Y_size","XnY_ctx","N_diff_obj","N_diff_obj_section","N_mut2_ctx","ANIm")
-names(Nayfach)=header
-Nayfach$y=1-Nayfach$ANIm
-#Nayfach$y= ifelse(Nayfach$ANIm <=1 , 1-Nayfach$ANIm, 1-Nayfach$ANIm/100)  
-# Define the objective function to minimize (e.g., residual standard error)
-simple_objective_fn <- function(par, data) {
-  denom <- 1 / (par[1] * data$XnY_ctx + par[2] * data$N_diff_obj_section + par[3] * data$N_mut2_ctx + par[4]*data$N_diff_obj)
-  model <- lm(y ~ (XnY_ctx + N_diff_obj_section + N_mut2_ctx + N_diff_obj) * denom, data = transform(data, denominator = denom))
-  return(summary(model)$sigma)  # Residual standard error
-}
-# Initial guess for a, b, c
-simple_start_par <- c(1, 1, 1, 1)
-# Run optimization
-simple_opt_result <- optim(par = simple_start_par, fn = simple_objective_fn, data = Nayfach)
-# Best coefficients
-simple_opt_result$par
-Nayfach$denominator <- 1 / (simple_opt_result$par[1]* Nayfach$XnY_ctx + simple_opt_result$par[2] * Nayfach$N_diff_obj_section 
-                            + simple_opt_result$par[3] * Nayfach$N_mut2_ctx + simple_opt_result$par[4]*Nayfach$N_diff_obj )
-
-simple_lm <- lm(y ~ ( XnY_ctx + N_diff_obj_section + N_mut2_ctx + N_diff_obj) * denominator, data = Nayfach)
-summary(simple_lm)
-cor(predict(simple_lm),Nayfach$y)
-plot(predict(simple_lm),Nayfach$y)
-abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
-
-#multi
+Nayfach3<-read.table("Nayfach52k.kssd3_codenpattern4",header=T)
+Nayfach3<-Nayfach3[Nayfach3$Qry_align_fraction > 0.3 & Nayfach3$Ref_align_fraction > 0.3,]
+Nayfach3<-Nayfach3[,c(3:10)]
+Nayfach3$y=1-Nayfach3$ANIm
+Nayfach<-Nayfach3 #[sample(1:nrow(Nayfach3),50000),]
 # -------- Objective Function with 3 denominators, each using 4 terms --------
 objective_fn <- function(par, data) {
   # Unpack parameters
@@ -79,12 +52,45 @@ final_model <- lm(y ~ (XnY_ctx + N_diff_obj_section + N_mut2_ctx + N_diff_obj) *
                   data = Nayfach)
 # Show summary
 summary(final_model)
-
 cor(predict(final_model),Nayfach$y)
 plot(predict(final_model),Nayfach$y)
 abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
 
-#####other features(may not be used)
+###test_model
+test<-read.table("Pseudomonas_E_paracarnis.kssd3_codenpattern4",header=T)
+test<-test[,c(3:10)]
+#names(test)=header
+
+test$y=1-test$ANIu/100  
+
+
+test$denom1 <- 1 / (p[1] * test$XnY_ctx + p[2] * test$N_diff_obj_section + p[3] * test$N_mut2_ctx + p[4] * test$N_diff_obj + epsilon)
+test$denom2 <- 1 / (p[5] * test$XnY_ctx + p[6] * test$N_diff_obj_section + p[7] * test$N_mut2_ctx + p[8] * test$N_diff_obj + epsilon)
+test$denom3 <- 1 / (p[9] * test$XnY_ctx + p[10] * test$N_diff_obj_section + p[11] * test$N_mut2_ctx + p[12] * test$N_diff_obj + epsilon)
+
+final_predictions <- predict(final_model, newdata = test)
+
+cor(test$N_diff_obj_section/9/test$XnY_ctx,test$y)
+cor(final_predictions,test$y)
+plot(final_predictions,test$y)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+#####other model and features(may not be used)
+simple_objective_fn <- function(par, data) {
+  denom <- 1 / (par[1] * data$XnY_ctx + par[2] * data$N_diff_obj_section + par[3] * data$N_mut2_ctx + par[4]*data$N_diff_obj)
+  model <- lm(y ~ (XnY_ctx + N_diff_obj_section + N_mut2_ctx + N_diff_obj) * denom, data = transform(data, denominator = denom))
+  return(summary(model)$sigma)  # Residual standard error
+}
+# Initial guess for a, b, c
+simple_start_par <- c(1, 1, 1, 1)
+# Run optimization
+simple_opt_result <- optim(par = simple_start_par, fn = simple_objective_fn, data = Nayfach)
+# Best coefficients
+simple_opt_result$par
+Nayfach$denominator <- 1 / (simple_opt_result$par[1]* Nayfach$XnY_ctx + simple_opt_result$par[2] * Nayfach$N_diff_obj_section 
+                            + simple_opt_result$par[3] * Nayfach$N_mut2_ctx + simple_opt_result$par[4]*Nayfach$N_diff_obj )
+
+simple_lm <- lm(y ~ ( XnY_ctx + N_diff_obj_section + N_mut2_ctx + N_diff_obj) * denominator, data = Nayfach)
+summary(simple_lm)
 
 Nayfach$Min_size=ifelse(Nayfach$X_size < Nayfach$Y_size,Nayfach$X_size,Nayfach$Y_size)
 Nayfach$Jcd = Nayfach$XnY_ctx/(Nayfach$X_size + Nayfach$Y_size - Nayfach$XnY_ctx)
@@ -112,26 +118,7 @@ summary(m2lm)
 cor(predict(m2lm),Nayfach$y)
 plot(predict(m2lm),Nayfach$y)
 abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
-###test_data
-test<-read.table("Kingella_kingae14.pkssd14_vs_ANIu")
-test<-read.table("Neisseria_meningitidis14.pkssd14_vs_ANIu")
-test<-test[,c(3:10)]
-names(test)=header
 
-test$denominator <- 1 / (simple_opt_result$par[1]* test$XnY_ctx + simple_opt_result$par[2] * test$N_diff_obj_section 
-                            + simple_opt_result$par[3] * test$N_mut2_ctx + simple_opt_result$par[4]*test$N_diff_obj )
-test$y=1-test$ANIm/100  
-
-
-test$denom1 <- 1 / (p[1] * test$XnY_ctx + p[2] * test$N_diff_obj_section + p[3] * test$N_mut2_ctx + p[4] * test$N_diff_obj + epsilon)
-test$denom2 <- 1 / (p[5] * test$XnY_ctx + p[6] * test$N_diff_obj_section + p[7] * test$N_mut2_ctx + p[8] * test$N_diff_obj + epsilon)
-test$denom3 <- 1 / (p[9] * test$XnY_ctx + p[10] * test$N_diff_obj_section + p[11] * test$N_mut2_ctx + p[12] * test$N_diff_obj + epsilon)
-
-final_predictions <- predict(final_model, newdata = test)
-
-cor(final_predictions,test$y)
-plot(final_predictions,test$y)
-abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
 
 simple_predictions <- predict(simple_lm, newdata = test)
 

@@ -3,6 +3,7 @@
 #include "global_basic.h"
 #include "kssdlib_sort.h"
 #include "sketch_rearrange.h"
+#include "model_ani.h"
 #include <assert.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -26,96 +27,6 @@ const char gid_obj_prefix[] = "gidobj", ctx_idx_prefix[] = "ctx.index";
 extern const char sorted_comb_ctxgid64obj32[];
 extern double C9O7_98[6], C9O7_96[6];
 size_t file_size;
-/*
-int compute_ani(ani_opt_t *ani_opt){
-	//initialize
-	dim_sketch_stat_t *dim_sketch_stat = read_from_file(test_get_fullpath(ani_opt->refdir, sketch_stat),&file_size);
-	const_comask_init(dim_sketch_stat);
-	// read index
-	uint64_t *sketch_index = read_from_file(test_get_fullpath(ani_opt->refdir,idx_sketch_suffix),&file_size);
-	assert(file_size == (dim_sketch_stat->infile_num + 1)*sizeof(sketch_index[0]));
-	size_t ref_sketch_size = sketch_index[dim_sketch_stat->infile_num];
-	ctxgidobj_t *sortedcomb_ctxgid64obj32 = read_from_file(test_get_fullpath(ani_opt->refdir, sorted_comb_ctxgid64obj32),&file_size);
-	assert(file_size == ref_sketch_size * sizeof(sortedcomb_ctxgid64obj32[0]) );
-
-	unify_sketch_t* result = generic_sketch_parse(ani_opt->refdir);
-	const_comask_init(&result->stats.lco_stat_val);
-
-	ctxgidobj_t * sortedcomb_ctxgid64obj32 =  comb_sortedsketch64_2sortedcomb_ctxgid64obj32(result);
-printf("FLG3:%lu\n",time(NULL) - second);
-	uint64_t sketch_size = result->sketch_index[result->infile_num];
-	sort_sketch_summary_t *sort_sketch_summary = summarize_ctxgidobj_arr(sortedcomb_ctxgid64obj32, result->sketch_index, sketch_size, result->infile_num);
-printf("FLG4:%lu\n",time(NULL) - second);
-	sorted_ctxgidobj_arrXcomb_sortedsketch64 ( result, sortedcomb_ctxgid64obj32, sort_sketch_summary );
- printf("FLG5:%lu\n",time(NULL) - second);
-}
-*/
-
-// ani linear learning coeffs
-double C9O7_98[6] = {-88.96, 3.701e-5, 1.537, 1.324, 8.118, 1.856};
-double C9O7_96[6] = {-340.1, -1.225e-4, 5.524, 6.456, 39.88, 4.289};
-/*/ xgb model Global handles
-//BoosterHandle booster = NULL;
-//DMatrixHandle dmatrix = NULL;
-// const char model_path[] = "f8C9O7_model.xgb";
-//  Load model once at program start
-void init_model(const char *model_path)
-{
-	if (XGBoosterCreate(NULL, 0, &booster) != 0)
-		err(EXIT_FAILURE, "%s(): Failed to create booster.", __func__);
-	if (XGBoosterLoadModel(booster, model_path) != 0)
-		err(EXIT_FAILURE, "%s(): Failed to load model.", __func__);
-}
-// Free model at program end
-void cleanup_model()
-{
-	if (booster)
-		XGBoosterFree(booster);
-	if (dmatrix)
-		XGDMatrixFree(dmatrix);
-}
-// const bst_ulong n_rows = 1;
-// const bst_ulong n_cols = 5;
-*/
-inline double get_learned_ani(int XnY_ctx, float af_qry, float af_ref, float dist, float ani)
-{
-	double learned_ani = 0;
-	double coeffs[6] = {0};
-	//if (hclen == 9 && holen == 7)
-	{
-		/* linear model
-			if (ani >= 98 && af_qry > 0.2 && af_ref > 0.2) memcpy(coeffs,C9O7_98, sizeof(C9O7_98));
-			else memcpy(coeffs,C9O7_96, sizeof(C9O7_96));
-			learned_ani = coeffs[0] + coeffs[1]*XnY_ctx + coeffs[2]*af_qry + coeffs[3]*af_ref + coeffs[4]*dist + coeffs[5]*ani;
-		*/
-		if (ani >= 98 && af_qry > 0.5 && af_ref > 0.5)
-		{
-			learned_ani = C9O7_98[0] + C9O7_98[1] * XnY_ctx + C9O7_98[2] * af_qry + C9O7_98[3] * af_ref + C9O7_98[4] * dist + C9O7_98[5] * ani;
-			if (learned_ani > 100)
-				learned_ani = 100;
-			return learned_ani;
-		}
-		/*
-		// xgb model, when ani < 98
-		float data[5] = {(float)XnY_ctx, af_qry, af_ref, dist, ani};
-		// float data[5] = {  17748, 0.995904, 0.995904, 0.000000, 100.000000 };
-		if (dmatrix)
-			XGDMatrixFree(dmatrix);
-		// # XGDMatrixCreateFromMat(data, n_rows, n_cols, missing, &dmatrix)
-		if (XGDMatrixCreateFromMat(data, 1, 5, -1, &dmatrix) != 0)
-			err(EXIT_FAILURE, "%s(): Failed to create DMatrix.", __func__);
-		const float *out_result;
-		bst_ulong out_len;
-		if (XGBoosterPredict(booster, dmatrix, 0, 0, 0, &out_len, &out_result) != 0)
-			err(EXIT_FAILURE, "%s(): Prediction failed.", __func__);
-		learned_ani = (double)out_result[0];
-		*/
-	}
-	if (learned_ani > 100)
-		learned_ani = 100;
-	return learned_ani;
-}
-//-----------
 
 int compare_idani_desc(const void *a, const void *b)
 {
@@ -160,7 +71,6 @@ inline void count_ctx_obj_frm_comb_sketch_section(ctx_mut2_t *ctx, obj_section_t
 					}				
 					MOBJ(ref_gnum, i, gid).diff_obj_section += num_diff_obj_section;
 					if(num_diff_obj_section >1 ) MCTX(ref_gnum, i, gid).num_mut2_ctx++;		
-//	printf("%lx\t%lx\t%lx\t%d\n", a[j]>> Bitslen.obj, (uint32_t)(a[j] & objmask), ctxgidobj_arr[d].obj,num_diff_obj_section);		
 				}
 			}
 		}
@@ -274,7 +184,7 @@ int mem_eff_sorted_ctxgidobj_arrXcomb_sortedsketch64(ani_opt_t *ani_opt)
 
 void ani_block_print(int ref_infile_num, int qry_gid_offset, int this_block_size, uint64_t *ref_sketch_index, uint64_t *qry_sketch_index, ctx_mut2_t *ctx, obj_section_t *obj, char (*refname)[PATHLEN], char (*qryfname)[PATHLEN], uint32_t *num_passid_block, idani_t **sort_idani_block, FILE *outfp)
 {
-
+	ani_features_t ani_features;
 	for (int i = 0; i < this_block_size; i++)
 	{
 		int qry_gid = qry_gid_offset + i;
@@ -283,16 +193,19 @@ void ani_block_print(int ref_infile_num, int qry_gid_offset, int this_block_size
 		for (int n = 0; n < num_passid_block[i]; n++)
 		{
 			int j = sort_idani_block[i][n].id;
-			int XnY_ctx = MCTX(ref_infile_num, i, j).num_ctx;
-
-			float af_qry = (float)XnY_ctx / qry_sketch_size;
+			ani_features.XnY_ctx = MCTX(ref_infile_num, i, j).num_ctx;
+			ani_features.N_diff_obj_section = MOBJ(ref_infile_num, i, j).diff_obj_section;
+			ani_features.N_mut2_ctx = MCTX(ref_infile_num, i, j).num_mut2_ctx;
+			ani_features.N_diff_obj = MOBJ(ref_infile_num, i, j).diff_obj;	
+			
+			float af_qry = (float)ani_features.XnY_ctx / qry_sketch_size;
 			int ref_sketch_size = ref_sketch_index[j + 1] - ref_sketch_index[j];
-			float af_ref = (float)XnY_ctx / ref_sketch_size;
-			double dist = (double)MOBJ(ref_infile_num, i, j).diff_obj / XnY_ctx;
-			//double rel_diff_obj = (double)(MOBJ(ref_infile_num, i, j).diff_obj_section - MOBJ(ref_infile_num, i, j).diff_obj) / MOBJ(ref_infile_num, i, j).diff_obj;
-			double ani = sort_idani_block[i][n].ani * 100;
-			double learned_ani = get_learned_ani(XnY_ctx, af_qry, af_ref, dist, ani);
-			fprintf(outfp, "%s\t%s\t%d\t%f\t%f\t%d\t%d\t%d\t%lf\t%lf\n", qryfname[qry_gid], refname[j], XnY_ctx, af_qry, af_ref, MOBJ(ref_infile_num, i, j).diff_obj, MOBJ(ref_infile_num, i, j).diff_obj_section, MCTX(ref_infile_num, i, j).num_mut2_ctx , ani, learned_ani);
+			float af_ref = (float)ani_features.XnY_ctx / ref_sketch_size;
+			
+			double dist = lm3ways_dist_from_features(&ani_features);
+			double ani = (1 - dist) * 100;
+
+			fprintf(outfp, "%s\t%s\t%d\t%f\t%f\t%d\t%d\t%d\t%lf\n", qryfname[qry_gid], refname[j], ani_features.XnY_ctx, af_qry, af_ref, MOBJ(ref_infile_num, i, j).diff_obj, MOBJ(ref_infile_num, i, j).diff_obj_section, MCTX(ref_infile_num, i, j).num_mut2_ctx , ani);
 		}
 	}
 }
