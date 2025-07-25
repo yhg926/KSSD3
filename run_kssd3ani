@@ -180,8 +180,8 @@ PRGRAM="$PRO_D/bin/kssd3"
 #MODEL_C9O7="$PRO_D/ani_models/f8C9O7_model.xgb"
 TMP_D=$(mktemp -d /tmp/myapp.XXXXXX) 
 
-$PRGRAM sketch $sketching_options -o $TMP_D/ref ${ref_files[@]} >>  $TMP_D/run.log 
-$PRGRAM sketch $sketching_options -o $TMP_D/qry ${query_files[@]} >>  $TMP_D/run.log
+$PRGRAM sketch -T $sketching_options -o $TMP_D/ref ${ref_files[@]} >>  $TMP_D/run.log 
+$PRGRAM sketch -T $sketching_options -o $TMP_D/qry ${query_files[@]} >>  $TMP_D/run.log
 $PRGRAM sketch -i $TMP_D/ref >>  $TMP_D/run.log
 
 # Processing example with optional parameters
@@ -198,7 +198,7 @@ fi
 combined_options=""
 [[ -n "$m_num" ]] && combined_options+="-m${m_num} "
 [[ -n "$o_file" ]] && combined_options+="-o${o_file} "
-[[ -n "$model_file" ]] && combined_options+="-M${model_file}"
+#[[ -n "$model_file" ]] && combined_options+="-M${model_file}"
 combined_options="${combined_options%% }"
 echo ">>> sketching options: $sketching_options"
 echo ">>> estimating ani: $PRGRAM ani $combined_options  -r $TMP_D/ref -q $TMP_D/qry"
