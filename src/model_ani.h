@@ -78,7 +78,7 @@ static inline double lm3ways_dist_from_features_core(ani_features_t *features, c
     double denom2 = 1 / (p[4] * features->XnY_ctx + p[5] * features->N_diff_obj_section + p[6] * features->N_mut2_ctx + p[7] * features->N_diff_obj + EPSILON);
     double denom3 = 1 / (p[8] * features->XnY_ctx + p[9] * features->N_diff_obj_section + p[10] * features->N_mut2_ctx + p[11] * features->N_diff_obj + EPSILON);
     // compute 3-way linear model
-    double dist = linear_coeffs_3way_9CODENs[0] +
+    double dist = coeffs[0] +
                   coeffs[1] * features->XnY_ctx +
                   coeffs[2] * features->N_diff_obj_section +
                   coeffs[3] * features->N_mut2_ctx +
