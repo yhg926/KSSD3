@@ -9,8 +9,8 @@ PRONAME := kssd3
 TARGET := $(BINDIR)/$(PRONAME)
 PREFIX := /usr/local
 
-all: $(TARGET); \
-    echo "Build completed."
+all: $(TARGET)
+	@echo "Build completed."
 
 SRCS := $(wildcard $(SRCDIR)/*.c)
 
@@ -30,23 +30,24 @@ GEN_OBJS := $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(GEN_SRCS))
 
 OBJS := $(GEN_OBJS) $(KLIB_OBJS)
 
-$(TARGET): $(OBJS); \
-    mkdir -p $(BINDIR); \
-    $(CC) $(CFLAGS) $^ -o $@ -lz -lm
+$(TARGET): $(OBJS)
+	mkdir -p $(BINDIR)
+	$(CC) $(CFLAGS) $^ -o $@ -lz -lm
 
 $(KLIB_OBJS): CFLAGS += -Iklib
 
-$(OBJDIR)/%.o: $(SRCDIR)/%.c; \
-    mkdir -p $(OBJDIR); \
-    $(CC) $(CFLAGS) -c $< -o $@
+$(OBJDIR)/%.o: $(SRCDIR)/%.c
+	mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-clean:; rm -f $(TARGET) $(OBJS)
+clean:
+	rm -f $(TARGET) $(OBJS)
 
-install: all; \
-    sudo install -m 755 $(TARGET) $(PREFIX)/bin/$(PRONAME); \
-    echo "Installed $(PRONAME) to $(PREFIX)/bin"
+install:
+	sudo install -m 755 $(TARGET) $(PREFIX)/bin/$(PRONAME)
+	@echo "Installed $(PRONAME) to $(PREFIX)/bin"
 
-uninstall:; \
-    sudo rm -f $(PREFIX)/bin/$(PRONAME); \
-    echo "Removed $(PRONAME) from $(PREFIX)/bin"
+uninstall:
+	sudo rm -f $(PREFIX)/bin/$(PRONAME)
+	@echo "Removed $(PRONAME) from $(PREFIX)/bin"
 
