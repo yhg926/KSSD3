@@ -1,9 +1,11 @@
 setwd("/mnt/sdb/data/kssd3ani_project/ANIu_vs_kssd3/same_species")
-Nayfach3<-read.table("Nayfach52k.kssd3_codenpattern4",header=T)
-Nayfach3<-Nayfach3[Nayfach3$Qry_align_fraction > 0.3 & Nayfach3$Ref_align_fraction > 0.3,]
+Nayfach3<-read.table("Nayfach52k.kssd3_codenpattern_vs_ANIm",header=T)
 Nayfach3<-Nayfach3[,c(3:10)]
 Nayfach3$y=1-Nayfach3$ANIm
-Nayfach<-Nayfach3 #[sample(1:nrow(Nayfach3),50000),]
+# QC to 0.1
+Nayfach<-Nayfach3[Nayfach3$Qry_align_fraction > 0.1 & Nayfach3$Ref_align_fraction > 0.1,] #[sample(1:nrow(Nayfach3),50000),]
+# anim>0.95 subset
+Nayfach9<-Nayfach3[Nayfach3$ANIm >0.95 &Nayfach3$Qry_align_fraction > 0.3 & Nayfach3$Ref_align_fraction > 0.3,]
 # -------- Objective Function with 3 denominators, each using 4 terms --------
 objective_fn <- function(par, data) {
   # Unpack parameters
@@ -34,6 +36,13 @@ opt_result <- optim(
   control = list(maxit = 1000, reltol = 1e-6)
 )
 
+opt_result9 <- optim(
+  par = init_params,
+  fn = objective_fn,
+  data = Nayfach9,
+  method = "Nelder-Mead",
+  control = list(maxit = 1000, reltol = 1e-6)
+)
 # View optimal parameters
 cat("Optimal parameters:\n")
 param_names <- paste0(rep(c("a","b","c","d"), 3), rep(1:3, each = 4))
@@ -50,30 +59,75 @@ final_model <- lm(y ~ (XnY_ctx + N_diff_obj_section + N_mut2_ctx + N_diff_obj) *
                     (XnY_ctx + N_diff_obj_section + N_mut2_ctx + N_diff_obj) * denom2 +
                     (XnY_ctx + N_diff_obj_section + N_mut2_ctx + N_diff_obj) * denom3,
                   data = Nayfach)
+
+p9 <- opt_result9$par
+Nayfach9$denom1 <- 1 / (p9[1] * Nayfach9$XnY_ctx + p9[2] * Nayfach9$N_diff_obj_section + p9[3] * Nayfach9$N_mut2_ctx + p9[4] * Nayfach9$N_diff_obj + epsilon)
+Nayfach9$denom2 <- 1 / (p9[5] * Nayfach9$XnY_ctx + p9[6] * Nayfach9$N_diff_obj_section + p9[7] * Nayfach9$N_mut2_ctx + p9[8] * Nayfach9$N_diff_obj + epsilon)
+Nayfach9$denom3 <- 1 / (p9[9] * Nayfach9$XnY_ctx + p9[10] * Nayfach9$N_diff_obj_section + p9[11] * Nayfach9$N_mut2_ctx + p9[12] * Nayfach9$N_diff_obj + epsilon)
+# Final model using optimized denominators
+final_model9 <- lm(y ~ (XnY_ctx + N_diff_obj_section + N_mut2_ctx + N_diff_obj) * denom1 +
+                    (XnY_ctx + N_diff_obj_section + N_mut2_ctx + N_diff_obj) * denom2 +
+                    (XnY_ctx + N_diff_obj_section + N_mut2_ctx + N_diff_obj) * denom3,                  
+                   data = Nayfach9)
+
 # Show summary
 summary(final_model)
 cor(predict(final_model),Nayfach$y)
+
+predictions9 <- predict(final_model9, newdata = Nayfach9)
+cor(predictions9,Nayfach$y)
 plot(predict(final_model),Nayfach$y)
+plot(predictions9,Nayfach$y)
+
 abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
 
 ###test_model
-test<-read.table("Pseudomonas_E_paracarnis.kssd3_codenpattern4",header=T)
+test<-read.table("Neisseria_meningitidis.kssd3_codenpattern4",header=T)
 test<-test[,c(3:10)]
 #names(test)=header
-
+test$y=1-test$ANIm
 test$y=1-test$ANIu/100  
+#test <- Nayfach9
+pt<-p9
 
-
-test$denom1 <- 1 / (p[1] * test$XnY_ctx + p[2] * test$N_diff_obj_section + p[3] * test$N_mut2_ctx + p[4] * test$N_diff_obj + epsilon)
-test$denom2 <- 1 / (p[5] * test$XnY_ctx + p[6] * test$N_diff_obj_section + p[7] * test$N_mut2_ctx + p[8] * test$N_diff_obj + epsilon)
-test$denom3 <- 1 / (p[9] * test$XnY_ctx + p[10] * test$N_diff_obj_section + p[11] * test$N_mut2_ctx + p[12] * test$N_diff_obj + epsilon)
+test$denom1 <- 1 / (pt[1] * test$XnY_ctx + pt[2] * test$N_diff_obj_section + pt[3] * test$N_mut2_ctx + pt[4] * test$N_diff_obj + epsilon)
+test$denom2 <- 1 / (pt[5] * test$XnY_ctx + pt[6] * test$N_diff_obj_section + pt[7] * test$N_mut2_ctx + pt[8] * test$N_diff_obj + epsilon)
+test$denom3 <- 1 / (pt[9] * test$XnY_ctx + pt[10] * test$N_diff_obj_section + pt[11] * test$N_mut2_ctx + pt[12] * test$N_diff_obj + epsilon)
 
 final_predictions <- predict(final_model, newdata = test)
-
-cor(test$N_diff_obj_section/9/test$XnY_ctx,test$y)
 cor(final_predictions,test$y)
-plot(final_predictions,test$y)
+
+final_predictions9 <- predict(final_model9, newdata = test)
+cor(final_predictions9,test$y)
+
+plot(final_predictions9,test$y)
 abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+#### write-out parameters:
+# Output file
+outfile <- "model_coeffs_easy9.tsv"
+# Generate names
+opt_param_values <- opt_result9$par
+model_coeffs <- coef(final_model9)
+model_coeff_names <- names(model_coeffs)
+model_coeff_values <- as.numeric(model_coeffs)
+# Write to file
+con <- file(outfile, "w")
+writeLines("__OPT_PARAMS__", con)
+opt_line <- paste(sprintf("%.15g", opt_param_values), collapse = ",")
+writeLines(opt_line, con)
+writeLines("__MODEL_COEFFS__", con)
+for (i in seq_along(model_coeff_names)) {
+  if (!is.na(model_coeff_values[i])) {
+    writeLines(sprintf("%.15g,\t// %s", model_coeff_values[i], model_coeff_names[i]), con)
+  }
+}
+
+close(con)
+
+
+
+
 #####other model and features(may not be used)
 simple_objective_fn <- function(par, data) {
   denom <- 1 / (par[1] * data$XnY_ctx + par[2] * data$N_diff_obj_section + par[3] * data$N_mut2_ctx + par[4]*data$N_diff_obj)
