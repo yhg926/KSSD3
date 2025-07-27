@@ -10,12 +10,12 @@ const double opt_denom_params4x3[12] =
         1.0108940845453, 1.0010797461052, 0.98914550652945, 1.01536320288592, // denom2
         1.0061957741437, 0.9957814716168, 0.98352379677340, 1.00951820561544  // denom3
 };
-// ANI>95 subset parameters 
+// ANI>95 subset parameters
 const double N95opt_denom_params4x3[12] =
     {
         1.0196821174688, 0.9817771341602, 1.04637038371202, 1.02441485561367, // denom1
-        1.0074050784795, 1.0018402553389, 0.94654127396428, 0.94051319172603, // denom2
-        1.0163855061091, 0.9824051281495, 1.04908985213703, 1.01102197270052  // denom3
+        1.0163855061091, 0.9824051281495, 1.04908985213703, 1.01102197270052, // denom2
+        1.0074050784795, 1.0018402553389, 0.94654127396428, 0.94051319172603  // denom3
 };
 
 //  3-way linear model coefficients
@@ -102,10 +102,11 @@ static inline double lm3ways_dist_from_features(ani_features_t *features)
 {
 
     double dist = lm3ways_dist_from_features_core(features, opt_denom_params4x3, linear_coeffs_3way_9CODENs);
-    
+
     if (dist < 0.05)
         dist = lm3ways_dist_from_features_core(features, N95opt_denom_params4x3, N95linear_coeffs_3way_9CODENs);
-    if (dist < 0) dist = 0;
+    if (dist < 0)
+        dist = 0;
 
     return dist;
 }
