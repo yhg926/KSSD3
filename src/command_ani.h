@@ -64,10 +64,11 @@ sort_sketch_summary_t *summarize_ctxgidobj_arr(ctxgidobj_t* ctxgidobj_arr, uint6
 void free_sort_sketch_summary(sort_sketch_summary_t * sort_sketch_summary);
 //void sorted_ctxgidobj_arr2triangle (ctxgidobj_t* ctxgidobj_arr, sort_sketch_summary_t *sort_sketch_summary);
 void sorted_ctxgidobj_arrXcomb_sortedsketch64 ( unify_sketch_t* qry_result, ctxgidobj_t* ctxgidobj_arr, sort_sketch_summary_t *sort_sketch_summary );
-void comb_sortedsketch64Xcomb_sortedsketch64 ( unify_sketch_t* ref_result, unify_sketch_t* qry_result );
+//void comb_sortedsketch64Xcomb_sortedsketch64 ( unify_sketch_t* ref_result, unify_sketch_t* qry_result );
+void comb_sortedsketch64Xcomb_sortedsketch64(ani_opt_t *ani_opt);
 
 size_t* find_first_occurrences_AT_ctxgidobj_arr (const uint64_t *a, size_t a_size, const ctxgidobj_t *b, size_t b_size);
-
+//void get_ani_features_from_two_sorted_ctxobj64 (const uint64_t *a, size_t n,  const uint64_t *b, size_t m, ani_features_t* ani_features); 
 //print functions
 void ani_block_print_matrix (int ref_infile_num, int qry_gid_offset, int this_block_size, uint64_t *qry_sketch_index, ctx_mut2_t *ctx, obj_section_t *obj,char (*qryfname)[PATHLEN],FILE *outfp,ani_opt_t *ani_opt);
 void ani_block_print(int ref_infile_num, int qry_gid_offset, int this_block_size, uint64_t *ref_sketch_index, uint64_t *qry_sketch_index, ctx_mut2_t *ctx, obj_section_t *obj,char (*refname)[PATHLEN], char (*qryfname)[PATHLEN],uint32_t *num_passid_block, idani_t **sort_idani_block, FILE *outfp );

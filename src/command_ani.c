@@ -28,11 +28,44 @@ extern const char sorted_comb_ctxgid64obj32[];
 extern double C9O7_98[6], C9O7_96[6];
 size_t file_size;
 
+const char print_header[] = "Qry\tRef\tXnY_ctx\tQry_align_fraction\tRef_align_fraction\tN_diff_obj\tN_diff_obj_section\tN_mut2_ctx\tlearned_ANI\n";
 int compare_idani_desc(const void *a, const void *b)
 {
 	const idani_t *itemA = (const idani_t *)a;
 	const idani_t *itemB = (const idani_t *)b;
 	return (itemA->ani < itemB->ani) - (itemA->ani > itemB->ani);
+}
+
+//called by comb_sortedsketch64Xcomb_sortedsketch64()
+//cautions: a and b must be obj conflition removed arrays.
+inline void get_ani_features_from_two_sorted_ctxobj64 (const uint64_t *a, size_t n,  
+                                   const uint64_t *b, size_t m, ani_features_t* ani_features) {
+	uint8_t nobjbits = Bitslen.obj;									
+	uint64_t objmask = (1UL << nobjbits) - 1;
+	size_t i = 0, j = 0;
+	memset(ani_features, 0, sizeof(ani_features_t)); 
+
+    while (i < n && j < m) {
+	
+		if (a[i] >> nobjbits ==  b[j] >> nobjbits) {
+			ani_features->XnY_ctx++;
+			uint32_t has_diff_obj = (uint32_t)(a[i] & objmask ) ^ (b[j] & objmask);
+			if (has_diff_obj) {
+				ani_features->N_diff_obj++;
+				int num_diff_obj_section = 0;
+				for(int k = 0; k < nobjbits/2; k++){
+					if (has_diff_obj & (3U << (2 * k))) num_diff_obj_section++ ;
+				}
+				ani_features->N_diff_obj_section += num_diff_obj_section;	
+				if(num_diff_obj_section >1 ) ani_features->N_mut2_ctx++;
+			}
+            i++; j++;
+        } else if (a[i]  < b[j] ) { //else if (a[i] >> nobjbits < b[j] >> nobjbits)
+            i++;
+        } else {
+            j++;
+        }
+    }
 }
 
 #define MCTX(L, X, Y) (ctx[(size_t)((L) * (X) + (Y))])
@@ -149,7 +182,7 @@ int mem_eff_sorted_ctxgidobj_arrXcomb_sortedsketch64(ani_opt_t *ani_opt)
 		fprintf(outfp, "\n");
 	}
 	else
-		fprintf(outfp, "Qry\tRef\tXnY_ctx\tQry_align_fraction\tRef_align_fraction\tN_diff_obj\tN_diff_obj_section\tN_mut2_ctx\tANI\tlearned_ANI(if > 0)\n");
+		fprintf(outfp, print_header);
 
 	for (int b = 0; b <= qry_infile_num / block_size; b++)
 	{
@@ -600,27 +633,49 @@ void sorted_ctxgidobj_arrXcomb_sortedsketch64(unify_sketch_t *qry_result, ctxgid
 //...
 */
 
-void comb_sortedsketch64Xcomb_sortedsketch64(unify_sketch_t *ref_result, unify_sketch_t *qry_result)
+void comb_sortedsketch64Xcomb_sortedsketch64(ani_opt_t *ani_opt)
 {
+	unify_sketch_t *qry_result = generic_sketch_parse(ani_opt->qrydir);
+	unify_sketch_t *ref_result = generic_sketch_parse(ani_opt->refdir);
+
+	FILE *outfp = ani_opt->outf[0] == '\0' ? stdout : fopen(ani_opt->outf, "w");
+/* choose format
+	if (ani_opt->fmt)
+	{ // matrix format
+		for (int i = 0; i < ref_result->infile_num; i++) fprintf(outfp, "\t%s", ref_result->gname[i]);
+		fprintf(outfp, "\n");
+	}
+	else 
+*/
+	fprintf(outfp, print_header);
 	// #pragma omp parallel for num_threads(32) schedule(guided)
 	for (uint32_t rn = 0; rn < ref_result->infile_num; rn++)
 	{
 
 		uint64_t *arr_ref = ref_result->comb_sketch + ref_result->sketch_index[rn];
 		size_t len_ref = ref_result->sketch_index[rn + 1] - ref_result->sketch_index[rn];
-		printf("%s", ref_result->gname[rn]);
+		//printf(outfp,"%s", ref_result->gname[rn]);
 
 		for (uint32_t qn = 0; qn < qry_result->infile_num; qn++)
 		{
+			ani_features_t ani_features;
 			uint64_t *arr_qry = qry_result->comb_sketch + qry_result->sketch_index[qn];
 			size_t len_qry = qry_result->sketch_index[qn + 1] - qry_result->sketch_index[qn];
-			size_t XnY = count_overlaps(arr_ref, len_ref, arr_qry, len_qry);
-			double dist = get_mashD(klen, len_ref, len_qry, XnY);
-			printf("\t%lf", 1 - dist);
+			get_ani_features_from_two_sorted_ctxobj64 (arr_ref, len_ref, arr_qry, len_qry, &ani_features);
+			double af_qry = (double)ani_features.XnY_ctx / len_qry;
+			double af_ref = (double)ani_features.XnY_ctx / len_ref;
+
+			if (af_qry < ani_opt->afcut || af_ref < ani_opt->afcut) continue;
+			double dist = lm3ways_dist_from_features(&ani_features);
+			double ani = (1 - dist) * 100;
+			//double dist = get_mashD(klen, len_ref, len_qry, XnY);
+			fprintf(outfp, "%s\t%s\t%d\t%f\t%f\t%d\t%d\t%d\t%lf\n", ref_result->gname[rn], qry_result->gname[qn], 
+				ani_features.XnY_ctx, af_qry, af_ref, ani_features.N_diff_obj, ani_features.N_diff_obj_section, ani_features.N_mut2_ctx, ani);
 		}
-		printf("\n");
 	}
 }
+
+
 void check_comb_sortedsketch64(unify_sketch_t *result)
 {
 	for (uint32_t rn = 0; rn < result->infile_num; rn++)
@@ -688,3 +743,4 @@ size_t *find_first_occurrences_AT_ctxgidobj_arr(const uint64_t *a, size_t a_size
 
 	return indices;
 }
+

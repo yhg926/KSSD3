@@ -331,6 +331,7 @@ bool binary_search(const uint64_t *arr, size_t size, uint64_t target) {
 }
 
 // Binary search method for small vs large arrays
+// 20250801: improvement needed for sorted arrays: binary_search better started from last match position in large array ?
 size_t count_overlaps_binary_search(const uint64_t *small, size_t small_size,
                                     const uint64_t *large, size_t large_size) {
     size_t count = 0;
