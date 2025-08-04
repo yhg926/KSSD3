@@ -302,7 +302,8 @@ int cmd_sketch(struct argp_state *state)
       // ensure initalize global masks
       const_comask_init(&comblco_stat_one);
       mkdir_p(sketch_opt.outdir);
-
+      // initialize k-mer rearrange method: reorder_unituple_by_coden_pattern64() or uint64_kmer2ctxobj()
+      set_uint64kmer2generic_ctxobj(sketch_opt.coden_ctxobj_pattern);
       compute_sketch(&sketch_opt, infile_stat);
     }
     else

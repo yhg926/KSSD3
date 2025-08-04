@@ -2,6 +2,8 @@ setwd("/mnt/sdb/data/kssd3ani_project/ANIu_vs_kssd3/same_species")
 Nayfach3<-read.table("Nayfach52k.kssd3_codenpattern_vs_ANIm",header=T)
 Nayfach3<-Nayfach3[,c(3:10)]
 Nayfach3$y=1-Nayfach3$ANIm
+Nayfach3$naive_d = (1-(1-Nayfach3$N_diff_obj/(Nayfach3$XnY_ctx+Nayfach3$N_diff_obj))^((Nayfach3$N_diff_obj_section +1e-8)/(Nayfach3$N_diff_obj+1e-8)))/7
+
 # QC to 0.1
 Nayfach<-Nayfach3[Nayfach3$Qry_align_fraction > 0.1 & Nayfach3$Ref_align_fraction > 0.1,] #[sample(1:nrow(Nayfach3),50000),]
 # anim>0.95 subset
@@ -75,9 +77,10 @@ summary(final_model)
 cor(predict(final_model),Nayfach$y)
 
 predictions9 <- predict(final_model9, newdata = Nayfach9)
-cor(predictions9,Nayfach$y)
-plot(predict(final_model),Nayfach$y)
-plot(predictions9,Nayfach$y)
+cor(predictions9,Nayfach9$y)
+cor(Nayfach9$naive_d,Nayfach9$y)
+plot(predictions9,Nayfach9$y)
+plot(Nayfach9$naive_d,Nayfach9$y)
 
 abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
 
@@ -85,10 +88,10 @@ abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
 test<-read.table("Neisseria_meningitidis.kssd3_codenpattern4",header=T)
 test<-test[,c(3:10)]
 #names(test)=header
-test$y=1-test$ANIm
+#test$y=1-test$ANIm
 test$y=1-test$ANIu/100  
 #test <- Nayfach9
-pt<-p9
+pt<-p
 
 test$denom1 <- 1 / (pt[1] * test$XnY_ctx + pt[2] * test$N_diff_obj_section + pt[3] * test$N_mut2_ctx + pt[4] * test$N_diff_obj + epsilon)
 test$denom2 <- 1 / (pt[5] * test$XnY_ctx + pt[6] * test$N_diff_obj_section + pt[7] * test$N_mut2_ctx + pt[8] * test$N_diff_obj + epsilon)
@@ -100,7 +103,7 @@ cor(final_predictions,test$y)
 final_predictions9 <- predict(final_model9, newdata = test)
 cor(final_predictions9,test$y)
 
-plot(final_predictions9,test$y)
+plot(final_predictions,test$y)
 abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
 
 #### write-out parameters:

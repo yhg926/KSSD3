@@ -26,10 +26,11 @@ struct arg_ani
 
 static struct argp_option opt_ani[] =
 	{
-		{"ref", 'r', "<DIR>", 0, "Path of reference sketches, do not set if need trianlge\v", 9},
+		{"ref", 'r', "<DIR>", 0, "Path of reference sketches, do not set if need trianlge\v", 1},
 		{"query", 'q', "<DIR>", 0, "Path of query sketches \v", 1},
 		{"index", 'i', "<FILE>", 0, "Inverted indexing of combined sketch.\v", 2},
-		{"model", 'M', "<FILE>", 0, "specify the trained ani model.\v", 2},
+//		{"model", 'M', "<FILE>", 0, "specify the trained ani model.\v", 2},
+		{"naive", 'v', 0, 0, "Use naive distane / ani caculation.\v", 2},
 		{"outfmt", 'm', "<0/1/2>", 0, "print results detail/matrix/triangle (0/1/2) [0]\v", 2},
 		{"afcut", 'f', "<FLOAT>", 0, "When report, Skip alignment fraction < [0.1] \v", 3},
 		{"anicut", 'n', "<FLOAT>", 0, "When report, Skip ani < [0.5] \v", 3},
@@ -52,6 +53,7 @@ ani_opt_t ani_opt = {
 	.c = 0.0, // control duplicated sample by skip distance < c;
 	.p = 1,
 	.d = 0, // diagonal
+	.v = 0, // naive model 
 	.afcut = 0.1,
 	.anicut = 0.3,
 	.e = 0, // abort
@@ -60,7 +62,7 @@ ani_opt_t ani_opt = {
 	.qrydir[0] = '\0',
 	.outf[0] = '\0',
 	.gl[0] = '\0',
-	.model[0] = '\0',
+//	.model[0] = '\0',
 	.num_remaining_args = 0, // int num_remaining_args; no option arguments num.
 	.remaining_args = NULL	 // char **remaining_args; no option arguments array.
 };
@@ -147,6 +149,11 @@ static error_t parse_ani(int key, char *arg, struct argp_state *state)
 		ani_opt.d = 1;
 		break;
 	}
+	case 'v':
+	{
+		ani_opt.v = 1;
+		break;
+	}
 	case ARGP_KEY_ARGS:
 	{
 		ani_opt.num_remaining_args = state->argc - state->next;
@@ -188,6 +195,8 @@ static struct argp argp_ani =
 		doc_ani};
 extern const char sorted_comb_ctxgid64obj32[];
 
+get_generic_dist_from_features_fn get_generic_dist_from_features = NULL;
+
 int cmd_ani(struct argp_state *state)
 {
 	struct arg_ani ani = {
@@ -199,7 +208,8 @@ int cmd_ani(struct argp_state *state)
 	argp_parse(&argp_ani, argc, argv, ARGP_IN_ORDER, &argc, &ani);
 	state->next += argc - 1;
 	size_t file_size;
-
+	// instantilize distance fn according selection of naive model or not
+	get_generic_dist_from_features = ani_opt.v ? get_naive_dist : lm3ways_dist_from_features;
 	if (ani_opt.qrydir[0] != '\0')
 	{
 		dim_sketch_stat_t *qry_dim_sketch_stat = read_from_file(test_get_fullpath(ani_opt.qrydir, sketch_stat), &file_size);

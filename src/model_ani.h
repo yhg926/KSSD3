@@ -4,14 +4,14 @@
 // model 1: 3-way linear model parameters (NUM_CODENS==9 only)
 
 // optimized parameters for 3 denominator of 3-way linear model
-const double opt_denom_params4x3[12] =
+static const double opt_denom_params4x3[12] =
     {
         1.0090536851341, 1.0013604061893, 1.03540226374509, 1.04270754727088, // denom1
         1.0108940845453, 1.0010797461052, 0.98914550652945, 1.01536320288592, // denom2
         1.0061957741437, 0.9957814716168, 0.98352379677340, 1.00951820561544  // denom3
 };
 // ANI>95 subset parameters
-const double N95opt_denom_params4x3[12] =
+static const double N95opt_denom_params4x3[12] =
     {
         1.0196821174688, 0.9817771341602, 1.04637038371202, 1.02441485561367, // denom1
         1.0163855061091, 0.9824051281495, 1.04908985213703, 1.01102197270052, // denom2
@@ -19,7 +19,7 @@ const double N95opt_denom_params4x3[12] =
 };
 
 //  3-way linear model coefficients
-const double linear_coeffs_3way_9CODENs[17] =
+static const double linear_coeffs_3way_9CODENs[17] =
     {
         -0.587100397752123,    // (Intercept)
         -7.93027271403258e-08, // XnY_ctx
@@ -40,7 +40,7 @@ const double linear_coeffs_3way_9CODENs[17] =
         35045.3583333325,      // N_mut2_ctx:denom3
 };
 // ANI>95 subset of 3-way linear model coefficients
-const double N95linear_coeffs_3way_9CODENs[17] =
+static const double N95linear_coeffs_3way_9CODENs[17] =
     {
         10.7394186800999,      // (Intercept)
         -2.92835943410177e-08, // XnY_ctx
@@ -98,17 +98,17 @@ static inline double lm3ways_dist_from_features_core(ani_features_t *features, c
     return dist;
 }
 
+// 2. 3-ways linear model distance
 static inline double lm3ways_dist_from_features(ani_features_t *features)
 {
-
+    if (features-> XnY_ctx == 0) return 1; // if no ctx, return 1
+    else if (features->N_diff_obj == 0) return 0; // if no diff obj, return 0
+    // use optimized parameters lm prediction     
     double dist = lm3ways_dist_from_features_core(features, opt_denom_params4x3, linear_coeffs_3way_9CODENs);
-
-    if (dist < 0.05)
-        dist = lm3ways_dist_from_features_core(features, N95opt_denom_params4x3, N95linear_coeffs_3way_9CODENs);
-    if (dist < 0)
-        dist = 0;
-
+    if (dist < 0.05) dist = lm3ways_dist_from_features_core(features, N95opt_denom_params4x3, N95linear_coeffs_3way_9CODENs);
+    if (dist < 0) dist = 0;
     return dist;
 }
+
 
 #endif

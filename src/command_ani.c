@@ -3,8 +3,6 @@
 #include "global_basic.h"
 #include "kssdlib_sort.h"
 #include "sketch_rearrange.h"
-#include "model_ani.h"
-#include <assert.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,110 +26,13 @@ extern const char sorted_comb_ctxgid64obj32[];
 extern double C9O7_98[6], C9O7_96[6];
 size_t file_size;
 
-const char print_header[] = "Qry\tRef\tXnY_ctx\tQry_align_fraction\tRef_align_fraction\tN_diff_obj\tN_diff_obj_section\tN_mut2_ctx\tlearned_ANI\n";
-int compare_idani_desc(const void *a, const void *b)
-{
-	const idani_t *itemA = (const idani_t *)a;
-	const idani_t *itemB = (const idani_t *)b;
-	return (itemA->ani < itemB->ani) - (itemA->ani > itemB->ani);
-}
-
-//called by comb_sortedsketch64Xcomb_sortedsketch64()
-//cautions: a and b must be obj conflition removed arrays.
-inline void get_ani_features_from_two_sorted_ctxobj64 (const uint64_t *a, size_t n,  
-                                   const uint64_t *b, size_t m, ani_features_t* ani_features) {
-	uint8_t nobjbits = Bitslen.obj;									
-	uint64_t objmask = (1UL << nobjbits) - 1;
-	size_t i = 0, j = 0;
-	memset(ani_features, 0, sizeof(ani_features_t)); 
-
-    while (i < n && j < m) {
-	
-		if (a[i] >> nobjbits ==  b[j] >> nobjbits) {
-			ani_features->XnY_ctx++;
-			uint32_t has_diff_obj = (uint32_t)(a[i] & objmask ) ^ (b[j] & objmask);
-			if (has_diff_obj) {
-				ani_features->N_diff_obj++;
-				int num_diff_obj_section = 0;
-				for(int k = 0; k < nobjbits/2; k++){
-					if (has_diff_obj & (3U << (2 * k))) num_diff_obj_section++ ;
-				}
-				ani_features->N_diff_obj_section += num_diff_obj_section;	
-				if(num_diff_obj_section >1 ) ani_features->N_mut2_ctx++;
-			}
-            i++; j++;
-        } else if (a[i]  < b[j] ) { //else if (a[i] >> nobjbits < b[j] >> nobjbits)
-            i++;
-        } else {
-            j++;
-        }
-    }
-}
-
-#define MCTX(L, X, Y) (ctx[(size_t)((L) * (X) + (Y))])
-#define MOBJ(L, X, Y) (obj[(size_t)((L) * (X) + (Y))])
-inline void count_ctx_obj_frm_comb_sketch_section(ctx_mut2_t *ctx, obj_section_t *obj, ctxgidobj_t *ctxgidobj_arr, size_t ref_sksize, int ref_gnum, int section_gnum, uint64_t *section_sk, uint64_t *section_skidx, uint32_t *num_passid_block, idani_t **sort_idani_block, ani_opt_t *ani_opt)
-{
-//	printf("%d\n",Bitslen.obj/2); exit(0);
-	uint64_t gidmask = UINT64_MAX >> (64 - GID_NBITS), objmask = (1UL << Bitslen.obj) - 1;
-#pragma omp parallel for num_threads(ani_opt->p) schedule(guided)
-	for (int i = 0; i < section_gnum; i++)
-	{
-		uint64_t *a = section_sk + (section_skidx[i] - section_skidx[0]);
-		size_t a_size = section_skidx[i + 1] - section_skidx[i];
-		assert(a_size > 0);
-		size_t *idx = find_first_occurrences_AT_ctxgidobj_arr(a, a_size, ctxgidobj_arr, ref_sksize);
-
-		for (int j = 0; j < a_size; j++)
-		{
-			if (idx[j] == SIZE_MAX) continue;
-			// Skip when no findings, or conflict objects (adjacent elements with the same context)
-			//if ((j > 0 && (a[j] >> Bitslen.obj) == (a[j - 1] >> Bitslen.obj)) ||
-			//	(j < a_size - 1 && (a[j] >> Bitslen.obj) == (a[j + 1] >> Bitslen.obj)))
-			//	continue;
-			for (int d = idx[j];; d++)
-			{
-				if ((ctxgidobj_arr[d].ctxgid >> Bitslen.gid) != (a[j] >> Bitslen.obj)) break;
-				uint32_t gid = ctxgidobj_arr[d].ctxgid & gidmask;
-				MCTX(ref_gnum, i, gid).num_ctx++;
-				uint32_t has_diff_obj = (uint32_t)(a[j] & objmask) ^ ctxgidobj_arr[d].obj;
-				if (has_diff_obj){
-					MOBJ(ref_gnum, i, gid).diff_obj++;
-					// count diff_obj_section
-					int num_diff_obj_section = 0;
-					for(int k = 0; k < Bitslen.obj/2; k++){
-						if (has_diff_obj & (3U << (2 * k))) num_diff_obj_section++ ;
-					}				
-					MOBJ(ref_gnum, i, gid).diff_obj_section += num_diff_obj_section;
-					if(num_diff_obj_section >1 ) MCTX(ref_gnum, i, gid).num_mut2_ctx++;		
-				}
-			}
-		}
-		free(idx);
-		if (ani_opt->fmt == 0)
-		{	// print details  >0:matrix no need to sort
-			// sorting ref gid by ani descendingly
-			num_passid_block[i] = 0;
-			for (int j = 0; j < ref_gnum; j++)
-			{
-				if ((float)MCTX(ref_gnum, i, j).num_ctx / a_size < ani_opt->afcut)
-					continue;
-				float dist = (float)MOBJ(ref_gnum, i, j).diff_obj / MCTX(ref_gnum, i, j).num_ctx;
-				float ani = 1 - dist;
-				if (ani < ani_opt->anicut)
-					continue;
-				sort_idani_block[i][num_passid_block[i]].id = j;
-				sort_idani_block[i][num_passid_block[i]].ani = ani;
-				num_passid_block[i]++;
-			}
-			qsort(sort_idani_block[i], num_passid_block[i], sizeof(idani_t), compare_idani_desc);
-		}
-	}
-}
+const char print_header[] = "Qry\tRef\tXnY_ctx\tQry_align_fraction\tRef_align_fraction\tN_diff_obj\tN_diff_obj_section\tN_mut2_ctx\tANI\n";
 
 #define BLOCK_SIZE (4096) // #of qry genomes per batch, for mem_eff handling
 int mem_eff_sorted_ctxgidobj_arrXcomb_sortedsketch64(ani_opt_t *ani_opt)
 {
+		assert(get_generic_dist_from_features != NULL);
+
 	dim_sketch_stat_t *ref_dim_sketch_stat = read_from_file(test_get_fullpath(ani_opt->refdir, sketch_stat), &file_size);
 	int ref_infile_num = ref_dim_sketch_stat->infile_num;
 	// read index
@@ -235,10 +136,11 @@ void ani_block_print(int ref_infile_num, int qry_gid_offset, int this_block_size
 			int ref_sketch_size = ref_sketch_index[j + 1] - ref_sketch_index[j];
 			float af_ref = (float)ani_features.XnY_ctx / ref_sketch_size;
 			
-			double dist = lm3ways_dist_from_features(&ani_features);
+//			double dist = lm3ways_dist_from_features(&ani_features);
+//			double naive_dist = get_naive_dist(&ani_features); // (double)ani_features.N_diff_obj / ani_features.XnY_ctx;
+			double dist = get_generic_dist_from_features(&ani_features); 
 			double ani = (1 - dist) * 100;
-
-			fprintf(outfp, "%s\t%s\t%d\t%f\t%f\t%d\t%d\t%d\t%lf\n", qryfname[qry_gid], refname[j], ani_features.XnY_ctx, af_qry, af_ref, MOBJ(ref_infile_num, i, j).diff_obj, MOBJ(ref_infile_num, i, j).diff_obj_section, MCTX(ref_infile_num, i, j).num_mut2_ctx , ani);
+			fprintf(outfp, "%s\t%s\t%d\t%f\t%f\t%d\t%d\t%d\t%lf\n", qryfname[qry_gid], refname[j], ani_features.XnY_ctx, af_qry, af_ref, MOBJ(ref_infile_num, i, j).diff_obj, MOBJ(ref_infile_num, i, j).diff_obj_section, MCTX(ref_infile_num, i, j).num_mut2_ctx,ani);
 		}
 	}
 }
@@ -262,7 +164,7 @@ void ani_block_print_matrix(int ref_infile_num, int qry_gid_offset, int this_blo
 			{
 				double dist = (double)MOBJ(ref_infile_num, i, j).diff_obj / XnY_ctx;
 				ani = (1 - dist) * 100;
-				if (af_qry < ani_opt->ani)
+				if (af_qry < ani_opt->anicut)
 					ani = ani_opt->e;
 			}
 			fprintf(outfp, "\t%lf", ani);
@@ -666,7 +568,7 @@ void comb_sortedsketch64Xcomb_sortedsketch64(ani_opt_t *ani_opt)
 			double af_ref = (double)ani_features.XnY_ctx / len_ref;
 
 			if (af_qry < ani_opt->afcut || af_ref < ani_opt->afcut) continue;
-			double dist = lm3ways_dist_from_features(&ani_features);
+			double dist = get_generic_dist_from_features(&ani_features);
 			double ani = (1 - dist) * 100;
 			//double dist = get_mashD(klen, len_ref, len_qry, XnY);
 			fprintf(outfp, "%s\t%s\t%d\t%f\t%f\t%d\t%d\t%d\t%lf\n", ref_result->gname[rn], qry_result->gname[qn], 

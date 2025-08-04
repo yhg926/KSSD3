@@ -37,7 +37,6 @@ void public_vars_init(dim_sketch_stat_t* sketch_stat_raw){
 
 void compute_sketch(sketch_opt_t *sketch_opt_val, infile_tab_t *infile_stat)
 {   
-    set_uint64kmer2generic_ctxobj(sketch_opt_val->coden_ctxobj_pattern);
     if (sketch_opt_val->split_mfa)
     { // mfa files parse
         mfa2sortedctxobj64(sketch_opt_val, infile_stat);
