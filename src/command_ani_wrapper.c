@@ -39,7 +39,7 @@ static struct argp_option opt_ani[] =
 		{"outfile", 'o', "<FILE>", 0, "outfile path [STDOUT]\v", 5},
 		{"threads", 'p', "<INT>", 0, "Threads number to use \v", 6},
 		{"diagonal", 'd', 0, 0, "set diagonal\v", 7},
-		{"exception", 'e', "<INT>", 0, "set distance value when XnY == 0 \v", 8},
+		{"exception", 'e', "<INT>", 0, "set distance value when skipped [0]\v", 8},
 		{0}};
 
 static char doc_ani[] =
@@ -56,7 +56,7 @@ ani_opt_t ani_opt = {
 	.v = 0, // naive model 
 	.afcut = 0.1,
 	.anicut = 0.3,
-	.e = 0, // abort
+	.e = 1, // abort
 	.index[0] = '\0',
 	.refdir[0] = '\0',
 	.qrydir[0] = '\0',

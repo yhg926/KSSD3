@@ -206,8 +206,7 @@ static inline void count_ctx_obj_frm_comb_sketch_section(ctx_mut2_t *ctx, obj_se
 					continue;
 				float dist = (float)MOBJ(ref_gnum, i, j).diff_obj / MCTX(ref_gnum, i, j).num_ctx;
 				float ani = 1 - dist;
-				if (ani < ani_opt->anicut)
-					continue;
+				if (ani < ani_opt->anicut) continue;
 				sort_idani_block[i][num_passid_block[i]].id = j;
 				sort_idani_block[i][num_passid_block[i]].ani = ani;
 				num_passid_block[i]++;

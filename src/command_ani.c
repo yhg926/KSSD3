@@ -78,8 +78,7 @@ int mem_eff_sorted_ctxgidobj_arrXcomb_sortedsketch64(ani_opt_t *ani_opt)
 	// printf header
 	if (ani_opt->fmt)
 	{ // matrix format
-		for (int i = 0; i < ref_infile_num; i++)
-			fprintf(outfp, "\t%s", refname[i]);
+		for (int i = 0; i < ref_infile_num; i++) fprintf(outfp, "\t%s", refname[i]);
 		fprintf(outfp, "\n");
 	}
 	else
@@ -134,12 +133,11 @@ void ani_block_print(int ref_infile_num, int qry_gid_offset, int this_block_size
 			
 			float af_qry = (float)ani_features.XnY_ctx / qry_sketch_size;
 			int ref_sketch_size = ref_sketch_index[j + 1] - ref_sketch_index[j];
-			float af_ref = (float)ani_features.XnY_ctx / ref_sketch_size;
-			
+			float af_ref = (float)ani_features.XnY_ctx / ref_sketch_size;	
 //			double dist = lm3ways_dist_from_features(&ani_features);
 //			double naive_dist = get_naive_dist(&ani_features); // (double)ani_features.N_diff_obj / ani_features.XnY_ctx;
 			double dist = get_generic_dist_from_features(&ani_features); 
-			double ani = (1 - dist) * 100;
+			double ani = 1 - dist;
 			fprintf(outfp, "%s\t%s\t%d\t%f\t%f\t%d\t%d\t%d\t%lf\n", qryfname[qry_gid], refname[j], ani_features.XnY_ctx, af_qry, af_ref, MOBJ(ref_infile_num, i, j).diff_obj, MOBJ(ref_infile_num, i, j).diff_obj_section, MCTX(ref_infile_num, i, j).num_mut2_ctx,ani);
 		}
 	}
@@ -147,6 +145,8 @@ void ani_block_print(int ref_infile_num, int qry_gid_offset, int this_block_size
 
 void ani_block_print_matrix(int ref_infile_num, int qry_gid_offset, int this_block_size, uint64_t *qry_sketch_index, ctx_mut2_t *ctx, obj_section_t *obj, char (*qryfname)[PATHLEN], FILE *outfp, ani_opt_t *ani_opt)
 {
+	ani_features_t ani_features;
+	double dist;
 	for (int i = 0; i < this_block_size; i++)
 	{
 		int qry_gid = qry_gid_offset + i;
@@ -155,18 +155,15 @@ void ani_block_print_matrix(int ref_infile_num, int qry_gid_offset, int this_blo
 
 		for (int j = 0; j < ref_infile_num; j++)
 		{
-			double ani;
-			int XnY_ctx = MCTX(ref_infile_num, i, j).num_ctx;
-			float af_qry = (float)XnY_ctx / qry_sketch_size;
-			if (af_qry < ani_opt->afcut)
-				ani = ani_opt->e;
-			else
-			{
-				double dist = (double)MOBJ(ref_infile_num, i, j).diff_obj / XnY_ctx;
-				ani = (1 - dist) * 100;
-				if (af_qry < ani_opt->anicut)
-					ani = ani_opt->e;
-			}
+			ani_features.XnY_ctx = MCTX(ref_infile_num, i, j).num_ctx;
+			ani_features.N_diff_obj_section = MOBJ(ref_infile_num, i, j).diff_obj_section;
+			ani_features.N_mut2_ctx = MCTX(ref_infile_num, i, j).num_mut2_ctx;
+			ani_features.N_diff_obj = MOBJ(ref_infile_num, i, j).diff_obj;	
+			double dist = get_generic_dist_from_features(&ani_features);
+			float af_qry = (float)ani_features.XnY_ctx / qry_sketch_size;
+
+			if (af_qry < ani_opt->afcut || dist > 1 - ani_opt->anicut ) dist = ani_opt->e;
+			double ani = 1 - dist;
 			fprintf(outfp, "\t%lf", ani);
 		}
 		fprintf(outfp, "\n");
@@ -569,7 +566,7 @@ void comb_sortedsketch64Xcomb_sortedsketch64(ani_opt_t *ani_opt)
 
 			if (af_qry < ani_opt->afcut || af_ref < ani_opt->afcut) continue;
 			double dist = get_generic_dist_from_features(&ani_features);
-			double ani = (1 - dist) * 100;
+			double ani = 1 - dist;
 			//double dist = get_mashD(klen, len_ref, len_qry, XnY);
 			fprintf(outfp, "%s\t%s\t%d\t%f\t%f\t%d\t%d\t%d\t%lf\n", ref_result->gname[rn], qry_result->gname[qn], 
 				ani_features.XnY_ctx, af_qry, af_ref, ani_features.N_diff_obj, ani_features.N_diff_obj_section, ani_features.N_mut2_ctx, ani);
