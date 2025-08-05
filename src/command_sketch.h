@@ -103,5 +103,6 @@ int opt2_seq2sortedsketch64(char* seqfname, char * outfname, bool abundance, int
 void mfa2sortedctxobj64( sketch_opt_t * sketch_opt_val, infile_tab_t* infile_stat);
 //void print_hash_table(khash_t(kmer_hash) *h);
 void write_sketch_stat (const char* outdir, infile_tab_t* infile_stat);
+simple_sketch_t* simple_genomes2mem2sortedctxobj64_mem (infile_tab_t *infile_stat, int drfold);
 
 #endif

@@ -938,3 +938,119 @@ void read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val, infile_tab_t 
     free_all(sketch_index, gseq_nums, batch_sketches, NULL);
     write_sketch_stat(sketch_opt_val->outdir, infile_stat);
 }
+
+
+
+simple_sketch_t* simple_genomes2mem2sortedctxobj64_mem (infile_tab_t *infile_stat, int drfold)
+{ // only for coden pattern sketching*
+    FILTER = UINT32_MAX >> drfold;
+    uint32_t len_mv = 2 * klen - 2;
+
+    uint64_t *sketch_index = calloc(infile_stat->infile_num + 1, sizeof(uint64_t));
+
+    int *gseq_nums = calloc(infile_stat->infile_num + 1, sizeof(int));
+
+    Vector all_reads;
+    vector_init(&all_reads, sizeof(char *));
+
+    int num = infile_stat->infile_num;    
+    uint64_t **batch_sketches = malloc(num * sizeof(uint64_t *));
+
+    for (int infile_num_p = 0; infile_num_p < num; infile_num_p++)
+    {
+        gzFile infile = gzopen((infile_stat->organized_infile_tab)[infile_num_p].fpath, "r");
+        if (!infile) err(errno, "%s(): Cannot open file %s", __func__, (infile_stat->organized_infile_tab)[infile_num_p].fpath);
+        kseq_t *seq = kseq_init(infile);
+
+        while (kseq_read(seq) >= 0)
+        {
+            char *read = malloc(seq->seq.l + 1);
+            if (!read)  err(errno, "%dth genome malloc failed", infile_num_p);
+            memcpy(read, seq->seq.s, seq->seq.l);
+            read[seq->seq.l] = '\0';
+            char **add = &read;
+            vector_push(&all_reads, add);
+            gseq_nums[(infile_num_p) + 1]++; // gseq_nums[infile_num_p+1]++;
+        }
+        kseq_destroy(seq);
+        gzclose(infile);
+
+        if (infile_num_p < num - 1) continue;
+
+        for (int i = 0; i < num; i++)  gseq_nums[i + 1] += gseq_nums[i];
+
+#pragma omp parallel for num_threads(2)
+        for (uint32_t i = 0; i < num; i++)
+        {
+
+            khash_t(sort64) *h = kh_init(sort64);
+            for (uint32_t j = gseq_nums[i]; j < gseq_nums[i + 1]; j++)
+            {
+                char *s = *(char **)vector_get(&all_reads, j);
+                int len = strlen(s);
+                if (len < klen) continue;
+                int base = 0;
+                uint64_t tuple, crvstuple, unituple, basenum, unictx;
+                for (int pos = 0; pos < len; pos++)
+                {
+                    if (Basemap[(unsigned short)s[pos]] == DEFAULT)
+                    {
+                        base = 0;
+                        continue;
+                    }
+                    basenum = Basemap[(unsigned short)s[pos]];
+                    tuple = ((tuple << 2) | basenum);
+                    crvstuple = ((crvstuple >> 2) | ((basenum ^ 3LLU) << len_mv));
+                    if (++base < klen) continue;
+
+                    unituple = (tuple & ctxmask) < (crvstuple & ctxmask) ? tuple : crvstuple;
+                    unictx = unituple & ctxmask;
+                    if (SKETCH_HASH(unictx) > FILTER)
+                        continue;
+
+                    int ret;
+                    khint_t key = kh_put(sort64, h, reorder_unituple_by_coden_pattern64(unituple & tupmask), &ret);
+                    if (ret)
+                        kh_value(h, key) = 1;
+                } // nt pos loop
+                free(s);
+            } // seq j loop
+
+            SortedKV_Arrays_t lco_ab = sort_khash_u64(h);
+
+            // remove context with conflict object
+            remove_ctx_with_conflict_obj(&lco_ab, Bitslen.obj);
+
+            // may filter n for lco_ab
+            batch_sketches[i] = lco_ab.keys;
+            sketch_index[i + 1] = lco_ab.len;
+
+            kh_destroy(sort64, h);
+            free(lco_ab.values);
+        } // genome i loop
+     
+    } // infile_num_p loop
+    for (int i = 0; i < num; i++) 
+        sketch_index[i + 1] += sketch_index[i];
+
+    uint64_t *combined_sketch = malloc( sizeof(uint64_t) * sketch_index[num]);
+    if (!combined_sketch) err(EXIT_FAILURE, "combined_sketch allocation failed");
+
+    for (int i = 0; i < num; i++)
+    {
+        memcpy(combined_sketch + sketch_index[i], batch_sketches[i], sizeof(uint64_t) * (sketch_index[i + 1]- sketch_index[i]) );
+        free(batch_sketches[i]);
+    }
+          
+    vector_free(&all_reads);
+    free_all(gseq_nums, batch_sketches, NULL);
+
+    simple_sketch_t *return_sketch = malloc(sizeof(simple_sketch_t));
+    if (!return_sketch) err(EXIT_FAILURE, "return_sketch allocation failed");
+
+    return_sketch->comb_sketch = combined_sketch;
+    return_sketch->sketch_index = sketch_index;
+    return_sketch->infile_num = num; 
+
+    return return_sketch;
+}

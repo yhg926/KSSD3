@@ -12,12 +12,14 @@
 
 typedef struct ani_opt
 {
-	int fmt;  // print out format: 0:detail; 1, aafD; 2. 1-ani
-	double c; // minimal distance to enrolled sketches
-	int p;	  // threads
-	bool d;	  // diagnal
-	bool v;	  // naive model ?
+	int fmt;   // print out format: 0:detail; 1, aafD; 2. 1-ani
+	double c;  // minimal distance to enrolled sketches
+	int p;	   // threads
+	bool d;	   // diagnal
+	bool v;	   // naive model ?
+	bool pair; // pairwise compute
 	int e;
+	int s; // select metrics;
 	float afcut;
 	float anicut;
 	char index[PATHLEN];
@@ -77,13 +79,18 @@ void free_sort_sketch_summary(sort_sketch_summary_t *sort_sketch_summary);
 void sorted_ctxgidobj_arrXcomb_sortedsketch64(unify_sketch_t *qry_result, ctxgidobj_t *ctxgidobj_arr, sort_sketch_summary_t *sort_sketch_summary);
 // void comb_sortedsketch64Xcomb_sortedsketch64 ( unify_sketch_t* ref_result, unify_sketch_t* qry_result );
 void comb_sortedsketch64Xcomb_sortedsketch64(ani_opt_t *ani_opt);
+void simple_sortedsketch64Xcomb_sortedsketch64(simple_sketch_t *simple_sketch, infile_tab_t *genomes_infiletab, ani_opt_t *ani_opt);
 
 size_t *find_first_occurrences_AT_ctxgidobj_arr(const uint64_t *a, size_t a_size, const ctxgidobj_t *b, size_t b_size);
 // void get_ani_features_from_two_sorted_ctxobj64 (const uint64_t *a, size_t n,  const uint64_t *b, size_t m, ani_features_t* ani_features);
 // print functions
-void ani_block_print_matrix(int ref_infile_num, int qry_gid_offset, int this_block_size, uint64_t *qry_sketch_index, ctx_mut2_t *ctx, obj_section_t *obj, char (*qryfname)[PATHLEN], FILE *outfp, ani_opt_t *ani_opt);
-void ani_block_print(int ref_infile_num, int qry_gid_offset, int this_block_size, uint64_t *ref_sketch_index, uint64_t *qry_sketch_index, ctx_mut2_t *ctx, obj_section_t *obj, char (*refname)[PATHLEN], char (*qryfname)[PATHLEN], uint32_t *num_passid_block, idani_t **sort_idani_block, FILE *outfp);
-
+void ani_block_print(
+	int ref_infile_num, int qry_gid_offset, int this_block_size,
+	uint64_t *ref_sketch_index, uint64_t *qry_sketch_index,
+	ctx_mut2_t *ctx, obj_section_t *obj,
+	char (*refname)[PATHLEN], char (*qryfname)[PATHLEN],
+	uint32_t *num_passid_block, idani_t **sort_idani_block,
+	FILE *outfp, ani_opt_t *ani_opt, int matrix_mode);
 // inline functions
 // 1. 3-way linear model distance (see model_ani.h): static inline double lm3ways_dist_from_features(ani_features_t *features)
 // 2. naive distance: for where 3-way linear model is not applicable e.g. unassembled genomes , or Eukaryotic genomes?
@@ -98,7 +105,7 @@ static inline double get_naive_dist(ani_features_t *features)
 }
 // 3. generic distance function from 1. or 2.
 typedef double (*get_generic_dist_from_features_fn)(ani_features_t *features);
-extern get_generic_dist_from_features_fn get_generic_dist_from_features ;
+extern get_generic_dist_from_features_fn get_generic_dist_from_features;
 // called by comb_sortedsketch64Xcomb_sortedsketch64()
 // cautions: a and b must be obj conflition removed arrays.
 static inline void get_ani_features_from_two_sorted_ctxobj64(const uint64_t *a, size_t n,
@@ -206,7 +213,8 @@ static inline void count_ctx_obj_frm_comb_sketch_section(ctx_mut2_t *ctx, obj_se
 					continue;
 				float dist = (float)MOBJ(ref_gnum, i, j).diff_obj / MCTX(ref_gnum, i, j).num_ctx;
 				float ani = 1 - dist;
-				if (ani < ani_opt->anicut) continue;
+				if (ani < ani_opt->anicut)
+					continue;
 				sort_idani_block[i][num_passid_block[i]].id = j;
 				sort_idani_block[i][num_passid_block[i]].ani = ani;
 				num_passid_block[i]++;
