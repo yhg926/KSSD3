@@ -490,7 +490,7 @@ void comb_sortedsketch64Xcomb_sortedsketch64(ani_opt_t *ani_opt)
 		}
 		else
 	*/
-	fprintf(outfp, print_header);
+	fprintf(outfp,"%s\n", print_header);
 	// #pragma omp parallel for num_threads(32) schedule(guided)
 	for (uint32_t rn = 0; rn < ref_result->infile_num; rn++)
 	{
@@ -549,18 +549,20 @@ size_t *find_first_occurrences_AT_ctxgidobj_arr(const uint64_t *a, size_t a_size
 												const ctxgidobj_t *b, size_t b_size)
 {
 	size_t *indices = malloc(a_size * sizeof(size_t));
-	if (!indices)
-		return NULL;
-
+	if (!indices) return NULL;
 	size_t low = 0; // Track lower bound for binary search
+	int nobjbits = Bitslen.obj;
 
 	for (size_t i = 0; i < a_size; ++i)
 	{
-		const uint64_t target = a[i] >> Bitslen.obj; // (2*(2*holen + iolen ));
-
-		size_t high = b_size;
-		size_t pos = SIZE_MAX; // Default: not found
-
+		const uint64_t target = a[i] >> nobjbits; // (2*(2*holen + iolen ));
+		// when conflict objects are kept, skip searching if target[i+1] == target[i].
+		if(i >0 && target == a[i-1] >> nobjbits) {
+			indices[i] = indices[i - 1]; // Use the previous index if the current target is the same
+			continue;
+		}
+	
+		size_t high = b_size;		
 		// Leftmost binary search within [low, high)
 		while (low < high)
 		{
@@ -576,12 +578,10 @@ size_t *find_first_occurrences_AT_ctxgidobj_arr(const uint64_t *a, size_t a_size
 		}
 
 		// Check if target was found: modified from: if (low < b_size && b[low] == target) {
-		if (low < b_size && (b[low].ctxgid >> GID_NBITS == target))
-		{
-			pos = low;
-		}
-
-		indices[i] = pos;
+		if (low < b_size && (b[low].ctxgid >> GID_NBITS == target))	
+			indices[i] = low;
+		else
+			indices[i] = SIZE_MAX; // Not found
 	}
 
 	return indices;

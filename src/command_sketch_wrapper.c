@@ -42,6 +42,7 @@ static struct argp_option opt_sketch[] =
         {"use_coden_ctxobj", 'T', 0, 0, "use coden context object structure pattern [0].\v", 8},
         {"threads", 'p', "<INT>", 0, "Threads number to use. [1]\v", 9},
         {"index", 'i', "<FILE>", 0, "Inverted indexing of combined sketch.\v", 10},
+        {"conflict", 666, 0, 0, "keep conflict context-objet(for raw reads sketching).\v", 10},
         {"merge", 777, 0, 0, "merge sketches, not for genome sketching.\v", 10},
         {"splitmfa", 888, 0, 0, "treat mfa file as many genomes.\v", 11},
         {0}  
@@ -60,6 +61,7 @@ sketch_opt_t sketch_opt = {
     .kmerocrs = 1,
     .p = 1,         // threads num: p
     .abundance = 0, // no abundance
+    .conflict = 0, // no conflict context-objet.
     .merge_comblco = 0,
     .split_mfa = 0,
     .coden_ctxobj_pattern = false, // no coden ctxobj pattern
@@ -171,6 +173,11 @@ static error_t parse_sketch(int key, char *arg, struct argp_state *state)
   {
     sketch_opt.outdir = malloc(strlen(arg) + 10);
     strcpy(sketch_opt.outdir, arg);
+    break;
+  }
+  case 666:
+  {
+    sketch_opt.conflict = 1; // keep conflict context-objet(for raw reads sketching).
     break;
   }
   case 777:

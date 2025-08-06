@@ -164,8 +164,8 @@ static int compare_idani_desc(const void *a, const void *b)
 #define MOBJ(L, X, Y) (obj[(size_t)((L) * (X) + (Y))])
 static inline void count_ctx_obj_frm_comb_sketch_section(ctx_mut2_t *ctx, obj_section_t *obj, ctxgidobj_t *ctxgidobj_arr, size_t ref_sksize, int ref_gnum, int section_gnum, uint64_t *section_sk, uint64_t *section_skidx, uint32_t *num_passid_block, idani_t **sort_idani_block, ani_opt_t *ani_opt)
 {
-	//	printf("%d\n",Bitslen.obj/2); exit(0);
-	uint64_t gidmask = UINT64_MAX >> (64 - GID_NBITS), objmask = (1UL << Bitslen.obj) - 1;
+	int nobjbits = Bitslen.obj;
+	uint64_t gidmask = UINT64_MAX >> (64 - GID_NBITS), objmask = (1UL << nobjbits) - 1;
 #pragma omp parallel for num_threads(ani_opt->p) schedule(guided)
 	for (int i = 0; i < section_gnum; i++)
 	{
@@ -173,31 +173,46 @@ static inline void count_ctx_obj_frm_comb_sketch_section(ctx_mut2_t *ctx, obj_se
 		size_t a_size = section_skidx[i + 1] - section_skidx[i];
 		assert(a_size > 0);
 		size_t *idx = find_first_occurrences_AT_ctxgidobj_arr(a, a_size, ctxgidobj_arr, ref_sksize);
-
-		for (int j = 0; j < a_size; j++)
+		// record the minimum number of different objects when a has same context with different objects
+        //uint8_t *min_obj_sec_confict_a = malloc(ref_gnum);
+		int s = 1;
+		for (int j = 0; j < a_size; j+=s)
 		{
-			if (idx[j] == SIZE_MAX)
-				continue;
+			// consecuted s same context with different objects from array a are anlysised in one batch   
+			for(s = 1;j+s < a_size && idx[j] == idx[j+s];s++);
+			
+			if (idx[j] == SIZE_MAX) continue;
 			// Skip when no findings, or conflict objects (adjacent elements with the same context)
 			// if ((j > 0 && (a[j] >> Bitslen.obj) == (a[j - 1] >> Bitslen.obj)) ||
 			//	(j < a_size - 1 && (a[j] >> Bitslen.obj) == (a[j + 1] >> Bitslen.obj)))
 			//	continue;
-			for (int d = idx[j];; d++)
+			for (int d = idx[j]; ctxgidobj_arr[d].ctxgid >> GID_NBITS == a[j] >> nobjbits ; d++)
 			{
-				if ((ctxgidobj_arr[d].ctxgid >> Bitslen.gid) != (a[j] >> Bitslen.obj))
-					break;
+				//if ((ctxgidobj_arr[d].ctxgid >> GID_NBITS) != (a[j] >> nobjbits)) break;
+
 				uint32_t gid = ctxgidobj_arr[d].ctxgid & gidmask;
 				MCTX(ref_gnum, i, gid).num_ctx++;
-				uint32_t has_diff_obj = (uint32_t)(a[j] & objmask) ^ ctxgidobj_arr[d].obj;
-				if (has_diff_obj)
-				{
-					MOBJ(ref_gnum, i, gid).diff_obj++;
-					// count diff_obj_section
-					int num_diff_obj_section = dna_popcount(has_diff_obj);
+				int min_diff_obj_section = NUM_CODENS + 1; 
 
-					MOBJ(ref_gnum, i, gid).diff_obj_section += num_diff_obj_section;
-					if (num_diff_obj_section > 1)
+				for(int n = 0; n < s; n++){
+					uint32_t has_diff_obj_n = (uint32_t)(a[j+n] & objmask) ^ ctxgidobj_arr[d].obj;
+					if (has_diff_obj_n == 0){
+						min_diff_obj_section = 0;
+						break;
+					}
+					else{
+						int diff_obj_section_n = dna_popcount(has_diff_obj_n);
+						if (diff_obj_section_n < min_diff_obj_section)   
+							min_diff_obj_section =  diff_obj_section_n ;
+					}
+				}
+
+				if(min_diff_obj_section){
+					MOBJ(ref_gnum, i, gid).diff_obj++;
+					MOBJ(ref_gnum, i, gid).diff_obj_section += min_diff_obj_section;
+					if (min_diff_obj_section > 1)
 						MCTX(ref_gnum, i, gid).num_mut2_ctx++;
+
 				}
 			}
 		}

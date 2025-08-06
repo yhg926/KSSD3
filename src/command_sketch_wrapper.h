@@ -15,6 +15,7 @@ typedef struct sketch_opt
 	int kmerocrs;
 	int p; // threads counts
 	bool abundance;
+	bool conflict; // keep conflict context-object or not 
 	bool merge_comblco;
 	bool split_mfa;
 	bool coden_ctxobj_pattern; 	 

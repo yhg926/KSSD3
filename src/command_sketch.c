@@ -908,7 +908,8 @@ void read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val, infile_tab_t 
             } // seq j loop
             SortedKV_Arrays_t lco_ab = sort_khash_u64(h);
             // remove context with conflict object
-            remove_ctx_with_conflict_obj(&lco_ab, Bitslen.obj);
+            if(!sketch_opt_val->conflict)
+                remove_ctx_with_conflict_obj(&lco_ab, Bitslen.obj);
             // may filter n for lco_ab
             batch_sketches[i] = lco_ab.keys;
             sketch_index[infile_num_p - num + i + 2] = lco_ab.len;
