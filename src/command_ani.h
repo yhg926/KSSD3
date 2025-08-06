@@ -9,7 +9,7 @@
 #include "kssdlib_sort.h"
 #include "sketch_rearrange.h"
 #include "model_ani.h"
-
+#include "dna_popcount.h"
 typedef struct ani_opt
 {
 	int fmt;   // print out format: 0:detail; 1, aafD; 2. 1-ani
@@ -126,12 +126,15 @@ static inline void get_ani_features_from_two_sorted_ctxobj64(const uint64_t *a, 
 			if (has_diff_obj)
 			{
 				ani_features->N_diff_obj++;
+				/* old count method
 				int num_diff_obj_section = 0;
 				for (int k = 0; k < nobjbits / 2; k++)
 				{
 					if (has_diff_obj & (3U << (2 * k)))
 						num_diff_obj_section++;
 				}
+				*/
+				int num_diff_obj_section = dna_popcount(has_diff_obj);
 				ani_features->N_diff_obj_section += num_diff_obj_section;
 				if (num_diff_obj_section > 1)
 					ani_features->N_mut2_ctx++;
@@ -190,12 +193,8 @@ static inline void count_ctx_obj_frm_comb_sketch_section(ctx_mut2_t *ctx, obj_se
 				{
 					MOBJ(ref_gnum, i, gid).diff_obj++;
 					// count diff_obj_section
-					int num_diff_obj_section = 0;
-					for (int k = 0; k < Bitslen.obj / 2; k++)
-					{
-						if (has_diff_obj & (3U << (2 * k)))
-							num_diff_obj_section++;
-					}
+					int num_diff_obj_section = dna_popcount(has_diff_obj);
+
 					MOBJ(ref_gnum, i, gid).diff_obj_section += num_diff_obj_section;
 					if (num_diff_obj_section > 1)
 						MCTX(ref_gnum, i, gid).num_mut2_ctx++;
