@@ -927,7 +927,7 @@ void read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val, infile_tab_t 
         vector_free(&all_reads);
         vector_init(&all_reads, sizeof(char *));
 
-        printf("\r%d/%d genomes proceed\n", infile_num_p + 1, infile_stat->infile_num);
+        printf("\r%d/%d genomes processed\n", infile_num_p + 1, infile_stat->infile_num);
 
     } // infile_num_p loop
 
