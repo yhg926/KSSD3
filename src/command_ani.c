@@ -688,3 +688,90 @@ void simple_sortedsketch64Xcomb_sortedsketch64(simple_sketch_t *simple_sketch, i
 			   ani_features.XnY_ctx, af_qry, af_ref, ani_features.N_diff_obj, ani_features.N_diff_obj_section, ani_features.N_mut2_ctx, ani);
 	}
 }
+
+// fencepost search method
+#include <limits.h>
+
+static inline uint32_t top_k_bits_u64(uint64_t x, int k) {
+    if (k <= 0) return 0u;
+    if (k >= 64) return (uint32_t)x;   /* defensive; we clamp k well below 64 */
+    return (uint32_t)(x >> (64 - k));
+}
+
+int kssd_choose_k_fenceposts(size_t b_size, size_t a_size) {
+    if (a_size == 0 || b_size == 0) return 14;
+    double ratio = (double)b_size / (double)a_size;            /* ≈ m = b/a */
+    int k = (ratio > 1.0) ? (int)floor(log2(ratio) + 0.5) : 0; /* ~log2(m) */
+    if (k < 12) k = 12;   /* 4K buckets  (~32 KB of fenceposts) */
+    if (k > 20) k = 20;   /* 1M buckets  (~8  MB of fenceposts, 64-bit size_t) */
+    return k;
+}
+
+int kssd_build_fenceposts_ctxgid(const ctxgidobj_t *b, size_t b_size, int k, size_t *F) {
+    if (!b || !F || k < 0 || k > 32) return -1;
+    const size_t buckets = (size_t)1u << k;
+
+    for (size_t t = 0; t <= buckets; ++t) F[t] = b_size;
+
+    size_t next = 0;
+    for (size_t i = 0; i < b_size; ++i) {
+        uint64_t key  = (uint64_t)b[i].ctxgid >> GID_NBITS;  /* effective key */
+        uint32_t topk = top_k_bits_u64(key, k);
+        while (next <= topk) F[next++] = i;
+        if (next > buckets) break;
+    }
+    while (next <= buckets) F[next++] = b_size;
+    return 0;
+}
+
+static inline size_t lb_in_bucket_ctxgid(const ctxgidobj_t *b, const size_t *F, int k,
+                                         uint64_t target_key)
+{
+    const size_t buckets = (size_t)1u << k;
+    uint32_t t = top_k_bits_u64(target_key, k);
+    if (t > buckets) t = (uint32_t)buckets; /* defensive */
+
+    size_t lo = F[t];
+    size_t hi = F[t + 1];
+
+    while (lo < hi) {
+        size_t mid = lo + ((hi - lo) >> 1);
+        uint64_t mid_key = (uint64_t)b[mid].ctxgid >> GID_NBITS;
+        if (mid_key < target_key) lo = mid + 1; else hi = mid;
+    }
+    return lo; /* first position with key >= target_key (may be hi) */
+}
+
+size_t *kssd_find_first_occurrences_fenceposts(const uint64_t *a, size_t a_size,
+                                               const ctxgidobj_t *b, size_t b_size,
+                                               const size_t *F, int k, unsigned nobjbits)
+{
+    if (!a || !b || !F) return NULL;
+
+    size_t *idx = (size_t*)malloc(a_size * sizeof *idx);
+    if (!idx) return NULL;
+
+    uint64_t prev_key = UINT64_MAX;
+    size_t   prev_idx = SIZE_MAX;
+
+    for (size_t i = 0; i < a_size; ++i) {
+        uint64_t target_key = a[i] >> nobjbits;
+
+        if (i && target_key == prev_key) { /* reuse for duplicates in a */
+            idx[i] = prev_idx;
+            continue;
+        }
+
+        size_t pos = lb_in_bucket_ctxgid(b, F, k, target_key);
+
+        if (pos < b_size && (((uint64_t)b[pos].ctxgid >> GID_NBITS) == target_key))
+            idx[i] = pos;
+        else
+            idx[i] = SIZE_MAX;
+
+        prev_key = target_key;
+        prev_idx = idx[i];
+    }
+    return idx;
+}
+

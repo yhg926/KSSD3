@@ -91,6 +91,37 @@ void ani_block_print(
 	char (*refname)[PATHLEN], char (*qryfname)[PATHLEN],
 	uint32_t *num_passid_block, idani_t **sort_idani_block,
 	FILE *outfp, ani_opt_t *ani_opt, int matrix_mode);
+
+
+//fenceposts search
+#ifndef KSSD_FENCEPOSTS_H
+#define KSSD_FENCEPOSTS_H
+
+#include <stdint.h>
+#include <stddef.h>
+
+#ifndef GID_NBITS
+#  define GID_NBITS 20  /* you can override in your project config */
+#endif
+
+/* Heuristic chooser for k (buckets = 1<<k). Clamp keeps memory/cache sane. */
+int kssd_choose_k_fenceposts(size_t b_size, size_t a_size);
+
+/* Build fenceposts F of size (1<<k)+1 for array b (sorted by key(b)=ctxgid>>GID_NBITS).
+ * F[t] = first index i such that top-k bits of key(b[i]) >= t. F[2^k] = b_size.
+ * Returns 0 on success, -1 on error (bad args).
+ */
+int kssd_build_fenceposts_ctxgid(const ctxgidobj_t *b, size_t b_size, int k, size_t *F);
+
+/* Batch query: find leftmost index in b for each a[i] with key(a[i])=(a[i]>>nobjbits).
+ * Returns malloc'd array of length a_size (caller free), or NULL on OOM.
+ * indices[i] = SIZE_MAX if not found.
+ */
+size_t *kssd_find_first_occurrences_fenceposts(const uint64_t *a, size_t a_size,
+                                               const ctxgidobj_t *b, size_t b_size,
+                                               const size_t *F, int k, unsigned nobjbits);
+
+#endif /* KSSD_FENCEPOSTS_H */	
 // inline functions
 // 1. 3-way linear model distance (see model_ani.h): static inline double lm3ways_dist_from_features(ani_features_t *features)
 // 2. naive distance: for where 3-way linear model is not applicable e.g. unassembled genomes , or Eukaryotic genomes?
@@ -164,15 +195,28 @@ static int compare_idani_desc(const void *a, const void *b)
 #define MOBJ(L, X, Y) (obj[(size_t)((L) * (X) + (Y))])
 static inline void count_ctx_obj_frm_comb_sketch_section(ctx_mut2_t *ctx, obj_section_t *obj, ctxgidobj_t *ctxgidobj_arr, size_t ref_sksize, int ref_gnum, int section_gnum, uint64_t *section_sk, uint64_t *section_skidx, uint32_t *num_passid_block, idani_t **sort_idani_block, ani_opt_t *ani_opt)
 {
-	int nobjbits = Bitslen.obj;
+	uint32_t nobjbits = Bitslen.obj;
 	uint64_t gidmask = UINT64_MAX >> (64 - GID_NBITS), objmask = (1UL << nobjbits) - 1;
+	// for fencepost methods
+	int k = 17;
+	size_t buckets = (size_t)1u << k;
+	size_t *F= (size_t*) malloc((buckets + 1) * sizeof(*F) );
+	if(!F) return; 
+
 #pragma omp parallel for num_threads(ani_opt->p) schedule(guided)
 	for (int i = 0; i < section_gnum; i++)
 	{
 		uint64_t *a = section_sk + (section_skidx[i] - section_skidx[0]);
 		size_t a_size = section_skidx[i + 1] - section_skidx[i];
 		assert(a_size > 0);
-		size_t *idx = find_first_occurrences_AT_ctxgidobj_arr(a, a_size, ctxgidobj_arr, ref_sksize);
+		//fencepost
+		if(kssd_build_fenceposts_ctxgid(ctxgidobj_arr, ref_sksize,k,F) != 0) free(F);
+		
+		size_t *idx= kssd_find_first_occurrences_fenceposts(a, a_size, ctxgidobj_arr, ref_sksize,F,k,nobjbits);
+		if(!idx) free(F);
+
+		//size_t *idx = find_first_occurrences_AT_ctxgidobj_arr(a, a_size, ctxgidobj_arr, ref_sksize);
+		
 		// record the minimum number of different objects when a has same context with different objects
         //uint8_t *min_obj_sec_confict_a = malloc(ref_gnum);
 		int s = 1;
@@ -237,5 +281,10 @@ static inline void count_ctx_obj_frm_comb_sketch_section(ctx_mut2_t *ctx, obj_se
 		}
 	}
 }
+
+
+
+
+
 
 #endif
