@@ -201,7 +201,10 @@ static inline void count_ctx_obj_frm_comb_sketch_section(ctx_mut2_t *ctx, obj_se
 	int k = 17;
 	size_t buckets = (size_t)1u << k;
 	size_t *F= (size_t*) malloc((buckets + 1) * sizeof(*F) );
-	if(!F) return; 
+	if(kssd_build_fenceposts_ctxgid(ctxgidobj_arr, ref_sksize,k,F) != 0) {
+		free(F);
+		return;
+	}
 
 #pragma omp parallel for num_threads(ani_opt->p) schedule(guided)
 	for (int i = 0; i < section_gnum; i++)
@@ -210,7 +213,6 @@ static inline void count_ctx_obj_frm_comb_sketch_section(ctx_mut2_t *ctx, obj_se
 		size_t a_size = section_skidx[i + 1] - section_skidx[i];
 		assert(a_size > 0);
 		//fencepost
-		if(kssd_build_fenceposts_ctxgid(ctxgidobj_arr, ref_sksize,k,F) != 0) free(F);
 		
 		size_t *idx= kssd_find_first_occurrences_fenceposts(a, a_size, ctxgidobj_arr, ref_sksize,F,k,nobjbits);
 		if(!idx) free(F);
