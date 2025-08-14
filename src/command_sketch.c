@@ -1079,7 +1079,7 @@ void test_read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val,
                              __func__, sketch_opt_val->outdir, combined_sketch_suffix);
     // 8 MB buffered writes improve throughput on large outputs
     (void)setvbuf(comb_sketch_fp, NULL, _IOFBF, 8u << 20);
-
+// 
     const int nfiles = infile_stat->infile_num;
 
     for (int batch_start = 0; batch_start < nfiles; batch_start += batch_size) {
@@ -1130,8 +1130,6 @@ void test_read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val,
 
                     if (bmap == DEFAULT) { // non-ACGT → reset window
                         base = 0;
-                        tuple = 0;
-                        crv   = 0;
                         continue;
                     }
 
