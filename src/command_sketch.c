@@ -1146,11 +1146,12 @@ void test_read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val,
                     const uint64_t unictx   =  unituple & ctxmask;
 
                     // sketching decision based on context
-                    if (SKETCH_HASH(unictx) > FILTER) continue;
-
+                   // if (SKETCH_HASH(unictx) > FILTER) continue;
+                    if (((mix64(unictx) & 0xFF)) != 0) continue;
                     // Rearrange to context-object (same length) and store encoded k-mer (not a hash)
                     // Your helper packs it; unchanged API:
-                    const uint64_t ctxobj = uint64kmer2generic_ctxobj(unituple & tupmask);
+                 //   const uint64_t ctxobj = uint64kmer2generic_ctxobj(unituple & tupmask);
+                    const uint64_t ctxobj = make_ctxobj(unituple, ctxmask);
 
                     int ret;
                     khint_t key = kh_put(sort64, h, ctxobj, &ret);

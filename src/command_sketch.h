@@ -83,6 +83,64 @@ static inline uint64_t hash64(uint64_t key, uint64_t mask)
 };
 // define khash type
 
+
+//test
+
+// Choose c as power-of-two, e.g. 256 → mask 0xFF, to make the first test free.
+static inline int keep_prefilter(uint64_t x, uint64_t mask) {
+    // x = unictx (masked context)
+    return ((x & mask) == 0); // ~1/c passes, no hash yet
+}
+
+// Cheap but high-quality 64-bit mix (SplitMix64 finalizer).
+static inline uint64_t mix64(uint64_t x){
+    x += 0x9e3779b97f4a7c15ULL;
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
+}
+
+// Full keep (for when you want stronger uniformity than raw low bits)
+static inline int keep_full(uint64_t unictx, uint64_t mask) {
+    return ((mix64(unictx) & mask) == 0);
+}
+
+
+#include <immintrin.h> // for _pext_u64/_pdep_u64
+
+static inline int has_bmi2(void){
+#if defined(__x86_64__)
+    // Cheap cached CPUID check in your init code; shown schematically here.
+    return __builtin_cpu_supports("bmi2");
+#else
+    return 0;
+#endif
+}
+
+static inline uint64_t extract_context_compact(uint64_t unituple, uint64_t ctxmask){
+#if defined(__x86_64__)
+    if (__builtin_cpu_supports("bmi2")) {
+        return _pext_u64(unituple, ctxmask);  // compact context bits
+    }
+#endif
+    // Fallback: just mask (no compaction). Still correct.
+    return (unituple & ctxmask);
+}
+
+static inline uint64_t make_ctxobj(uint64_t unituple, uint64_t ctxmask){
+#if defined(__x86_64__)
+    if (__builtin_cpu_supports("bmi2")) {
+        uint64_t ctx = _pext_u64(unituple, ctxmask);
+        uint64_t obj = _pext_u64(unituple, ~ctxmask);
+        // Choose a stable layout; high=ctx, low=obj:
+        return (ctx << 32) | (obj & 0xFFFFFFFFULL);
+    }
+#endif
+    // Fallback to your existing packer
+    return uint64kmer2generic_ctxobj(unituple & tupmask);
+}
+
+//<-test
 //initialize funs
 //void public_vars_init(dim_sketch_stat_t* sketch_stat_raw) ; //initla global vars from sketch subcommand pars before sketch generated
 
