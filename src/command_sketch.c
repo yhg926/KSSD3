@@ -1061,10 +1061,9 @@ simple_sketch_t* simple_genomes2mem2sortedctxobj64_mem (infile_tab_t *infile_sta
 
 // drop-in replacement for read_genomes2mem2sortedctxobj64()
 // keeps identical interface and output semantics
-void test_read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val,
-                                     infile_tab_t *infile_stat,
-                                     int batch_size)
+void test_read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val, infile_tab_t *infile_stat, int batch_size)
 {
+    uint8_t nobjbits = Bitslen.obj;
     const uint32_t len_mv = (uint32_t)(2 * klen - 2);   // shift for reverse rolling
     uint64_t *sketch_index   = (uint64_t*)calloc((size_t)infile_stat->infile_num + 1, sizeof(uint64_t));
     if (!sketch_index) err(errno, "%s(): OOM sketch_index", __func__);
@@ -1075,13 +1074,11 @@ void test_read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val,
 
     // single combined output file, fully buffered
     FILE *comb_sketch_fp = fopen(format_string("%s/%s", sketch_opt_val->outdir, combined_sketch_suffix), "wb");
-    if (!comb_sketch_fp) err(errno, "%s() open file error: %s/%s",
-                             __func__, sketch_opt_val->outdir, combined_sketch_suffix);
+    if (!comb_sketch_fp) err(errno, "%s() open file error: %s/%s",__func__, sketch_opt_val->outdir, combined_sketch_suffix);
     // 8 MB buffered writes improve throughput on large outputs
     (void)setvbuf(comb_sketch_fp, NULL, _IOFBF, 8u << 20);
 // 
     const int nfiles = infile_stat->infile_num;
-
     for (int batch_start = 0; batch_start < nfiles; batch_start += batch_size) {
         const int batch_end   = (batch_start + batch_size <= nfiles) ? (batch_start + batch_size) : nfiles;
         const int this_batch  = batch_end - batch_start;
@@ -1110,24 +1107,19 @@ void test_read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val,
 
             // Heuristic reserve: assume ~1/8 of bases produce valid kept k-mers after filtering.
             // Tweak if you know your sampling rate (c) to reduce rehash.
-            const size_t reserve_hint = 1u << 15; // start with 32K; grows as needed
-            kh_resize(sort64, h, reserve_hint);
+            kh_resize(sort64, h, 1u << 15); // start with 32K; grows as needed
 
             while (kseq_read(seq) >= 0) {
                 const char *s = seq->seq.s;
                 const int   len = (int)seq->seq.l;
-
                 if (len < klen) continue;
-
                 // rolling 2-bit canonical
-                uint64_t tuple = 0;       // forward
-                uint64_t crv   = 0;       // reverse-complement
-                int      base  = 0;
+                uint64_t tuple, crv ; // forward and reverse-complement
+                int base = 0;
 
                 for (int pos = 0; pos < len; ++pos) {
-                    const unsigned char ch = (unsigned char)s[pos];
-                    const int bmap = Basemap[ch];
-
+                    
+                    const int bmap = Basemap[(unsigned char)s[pos]];
                     if (bmap == DEFAULT) { // non-ACGT → reset window
                         base = 0;
                         continue;
@@ -1142,16 +1134,16 @@ void test_read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val,
                     // compare (tuple & ctxmask) vs (crv & ctxmask)
                     const uint64_t t_ctx = (tuple & ctxmask);
                     const uint64_t r_ctx = (crv   & ctxmask);
-                    const uint64_t unituple = (t_ctx < r_ctx) ? tuple : crv;
+                    uint64_t unituple = (t_ctx < r_ctx) ? tuple : crv;
                     const uint64_t unictx   =  unituple & ctxmask;
 
                     // sketching decision based on context
-                   // if (SKETCH_HASH(unictx) > FILTER) continue;
-                    if (((mix64(unictx) & 0xFF)) != 0) continue;
+                    if (SKETCH_HASH(unictx) > FILTER) continue;
+                    unituple &= tupmask;
                     // Rearrange to context-object (same length) and store encoded k-mer (not a hash)
                     // Your helper packs it; unchanged API:
-                 //   const uint64_t ctxobj = uint64kmer2generic_ctxobj(unituple & tupmask);
-                    const uint64_t ctxobj = make_ctxobj(unituple, ctxmask);
+                   // const uint64_t ctxobj = uint64kmer2generic_ctxobj(unituple & tupmask);
+                    const uint64_t ctxobj = make_ctxobj(unituple, tupmask, ctxmask, nobjbits);
 
                     int ret;
                     khint_t key = kh_put(sort64, h, ctxobj, &ret);
@@ -1162,7 +1154,7 @@ void test_read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val,
             // finalize this genome: sort + (optionally) remove conflicts
             SortedKV_Arrays_t lco_ab = sort_khash_u64(h);
             if (!sketch_opt_val->conflict)
-                remove_ctx_with_conflict_obj(&lco_ab, Bitslen.obj);
+                remove_ctx_with_conflict_obj(&lco_ab, nobjbits);
 
             batch_sketches[bi] = lco_ab.keys; // will be written by main thread
             lens[bi]           = lco_ab.len;

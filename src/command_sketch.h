@@ -26,14 +26,6 @@
 
 #endif
 
-/*
-#define GID_NBITS 20
-//glovbal public vars 
-uint32_t FILTER,hash_id;
-uint64_t ctxmask,tupmask,ho_mask_len, hc_mask_len, io_mask_len, ho_mask_left,hc_mask_left, io_mask, hc_mask_right, ho_mask_right;
-uint8_t iolen, klen,hclen,holen ;
-uint32_t gid_mask; bitslen_t Bitslen;// context, gid, and obj bits len
-*/
 // hash functions for sketching
 // hash 1 : murmur3
 /*
@@ -43,33 +35,14 @@ uint32_t gid_mask; bitslen_t Bitslen;// context, gid, and obj bits len
     (uint32_t)(out[0] ^ out[1]); \
 })
 */
-
 //hash 2 : xxhash
+/*
 #define SKETCH_HASH(key) ({          \
     XXH64_hash_t hash64 = XXH64(&key, 8, 42);   \
    	(uint32_t) hash64; \
 })
-
-/* abolished 
-#define SKETCH_HASH(key) ({          \
-    XXH64_hash_t hash64 = XXH3_64bits_dispatch(&key, 8 );   \
-    (uint32_t)(hash64 >> 32) ^ (uint32_t)hash64; \
-})
-//
-#define GET_SKETCHING_ID(inv1,v2,v3,v4,v5) ( { \
-	uint64_t v1 = v1, test_num = 31415926; \
-  SKETCH_HASH(v1) ^ SKETCH_HASH(v2) ^ SKETCH_HASH(v3) \
-  ^ SKETCH_HASH(v4) ^ SKETCH_HASH(v5) ^ SKETCH_HASH(test_num) ; \
-})
 */
-
-static inline uint32_t GET_SKETCHING_ID(uint64_t v1, uint64_t v2, uint64_t v3 ,uint64_t v4 , uint64_t v5){
-	uint64_t test_num = 31415926;
-	return SKETCH_HASH(v1) ^ SKETCH_HASH(v2) ^ SKETCH_HASH(v3) ^ SKETCH_HASH(v4) ^ SKETCH_HASH(v5) ^ SKETCH_HASH(test_num) ; 	
-}
-
 //hash 3:
-
 static inline uint64_t hash64(uint64_t key, uint64_t mask)
 {
   key = (~key + (key << 21)) & mask; // key = (key << 21) - key - 1;
@@ -81,24 +54,28 @@ static inline uint64_t hash64(uint64_t key, uint64_t mask)
   key = (key + (key << 31)) & mask;
   return key;
 };
-// define khash type
-
-
-//test
-
-// Choose c as power-of-two, e.g. 256 → mask 0xFF, to make the first test free.
-static inline int keep_prefilter(uint64_t x, uint64_t mask) {
-    // x = unictx (masked context)
-    return ((x & mask) == 0); // ~1/c passes, no hash yet
-}
-
-// Cheap but high-quality 64-bit mix (SplitMix64 finalizer).
+// hash 4: Cheap but high-quality 64-bit mix (SplitMix64 finalizer).
 static inline uint64_t mix64(uint64_t x){
     x += 0x9e3779b97f4a7c15ULL;
     x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
     return x ^ (x >> 31);
+};
+
+#define SKETCH_HASH(key) ({    \
+     (uint32_t) mix64(key); \
+})
+
+static inline uint32_t GET_SKETCHING_ID(uint64_t v1, uint64_t v2, uint64_t v3 ,uint64_t v4 , uint64_t v5){
+	uint64_t test_num = 31415926;
+	return SKETCH_HASH(v1) ^ SKETCH_HASH(v2) ^ SKETCH_HASH(v3) ^ SKETCH_HASH(v4) ^ SKETCH_HASH(v5) ^ SKETCH_HASH(test_num) ; 	
 }
+
+
+// define khash type
+
+
+//test
 
 // Full keep (for when you want stronger uniformity than raw low bits)
 static inline int keep_full(uint64_t unictx, uint64_t mask) {
@@ -127,13 +104,15 @@ static inline uint64_t extract_context_compact(uint64_t unituple, uint64_t ctxma
     return (unituple & ctxmask);
 }
 
-static inline uint64_t make_ctxobj(uint64_t unituple, uint64_t ctxmask){
+static inline uint64_t make_ctxobj(uint64_t unituple, uint64_t tuplemask, uint64_t ctxmask, uint8_t nobjbits){
 #if defined(__x86_64__)
     if (__builtin_cpu_supports("bmi2")) {
         uint64_t ctx = _pext_u64(unituple, ctxmask);
-        uint64_t obj = _pext_u64(unituple, ~ctxmask);
+        uint64_t obj = _pext_u64(unituple, tuplemask & ~ctxmask );
         // Choose a stable layout; high=ctx, low=obj:
-        return (ctx << 32) | (obj & 0xFFFFFFFFULL);
+        //make sure obj occupy lowest nobjbits bits 
+        return (ctx << nobjbits) | obj;
+        // return (ctx << nobjbits) | (obj & ((1ULL<<nobjbits)-1));
     }
 #endif
     // Fallback to your existing packer
