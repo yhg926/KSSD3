@@ -27,6 +27,7 @@ typedef struct { uint64_t key;  uint32_t value;} kv_pair_t;
 typedef struct { int64_t *keys;int *values;size_t len;} SortedKV_Arrays_t ;
 int cmp_kv_pair(const void *a, const void *b);
 SortedKV_Arrays_t sort_khash_u64 (khash_t(sort64) *h);
+SortedKV_Arrays_t gpt_sort_khash_u64(khash_t(sort64) *h);
 void filter_n_SortedKV_Arrays(SortedKV_Arrays_t *result, uint32_t n);
 void remove_ctx_with_conflict_obj (SortedKV_Arrays_t *data, uint32_t n_obj_bits);
 //void free_SortedKV_Arrays (SortedKV_Arrays_t *result);

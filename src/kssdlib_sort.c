@@ -448,3 +448,95 @@ void free_SortedKV_Arrays (SortedKV_Arrays_t result){
 }
 
 */
+
+// chatgpt's khash sort 
+// Fast integer sort for (uint64_t key, uint32_t value) pairs from khash.
+// - No kv_pair_t staging
+// - LSD radix sort (8 passes over bytes) with companion array
+// - Fallback to qsort for tiny n to avoid overhead
+// Assumes: khash_t(sort64) maps uint64_t -> uint32_t (as your code implies)
+
+// comparator for small-n fallback (C, not C++)
+typedef struct { uint64_t k; uint32_t v; } P;
+
+static int cmp_P(const void *a, const void *b) {
+    const uint64_t ka = ((const P*)a)->k;
+    const uint64_t kb = ((const P*)b)->k;
+    return (ka > kb) - (ka < kb);
+}
+
+SortedKV_Arrays_t gpt_sort_khash_u64(khash_t(sort64) *h) {
+    SortedKV_Arrays_t result = (SortedKV_Arrays_t){0};
+    size_t n = kh_size(h);
+    result.len = n;
+    if (n == 0) return result;
+
+    // gather keys/vals (SoA)
+    uint64_t *keys = (uint64_t*)malloc(n * sizeof(uint64_t));
+    uint32_t *vals = (uint32_t*)malloc(n * sizeof(uint32_t));
+    if (!keys || !vals) err(EXIT_FAILURE, "%s(): OOM keys/vals", __func__);
+
+    size_t idx = 0;
+    for (khiter_t k = kh_begin(h); k != kh_end(h); ++k) {
+        if (!kh_exist(h, k)) continue;
+        keys[idx] = kh_key(h, k);
+        vals[idx] = kh_value(h, k);
+        ++idx;
+    }
+    result.len = idx;
+    n = idx;
+    if (n == 0) { result.keys = keys; result.values = vals; return result; }
+
+    // small-n fallback: use qsort on tiny struct, then copy back (still faster than kv_pair + extra copy)
+    if (n <= 1024) {
+        P *tmp = (P*)malloc(n * sizeof(P));
+        if (!tmp) err(EXIT_FAILURE, "%s(): OOM tmp", __func__);
+        for (size_t i = 0; i < n; ++i) { tmp[i].k = keys[i]; tmp[i].v = vals[i]; }
+        qsort(tmp, n, sizeof(P), cmp_P);
+        for (size_t i = 0; i < n; ++i) { keys[i] = tmp[i].k; vals[i] = tmp[i].v; }
+        free(tmp);
+        result.keys = keys;
+        result.values = vals;
+        return result;
+    }
+
+    // radix sort (LSD, 8 passes)
+    uint64_t *keys2 = (uint64_t*)malloc(n * sizeof(uint64_t));
+    uint32_t *vals2 = (uint32_t*)malloc(n * sizeof(uint32_t));
+    if (!keys2 || !vals2) err(EXIT_FAILURE, "%s(): OOM tmp2", __func__);
+
+    size_t count[256];
+    uint64_t *srcK = keys,  *dstK = keys2;
+    uint32_t *srcV = vals,  *dstV = vals2;
+
+    for (unsigned pass = 0; pass < 8; ++pass) {
+        // zero histogram
+        for (int i = 0; i < 256; ++i) count[i] = 0;
+
+        unsigned shift = pass * 8;
+        for (size_t i = 0; i < n; ++i) {
+            unsigned b = (unsigned)((srcK[i] >> shift) & 0xFFu);
+            ++count[b];
+        }
+        // prefix
+        size_t sum = 0;
+        for (int i = 0; i < 256; ++i) { size_t c = count[i]; count[i] = sum; sum += c; }
+        // stable scatter
+        for (size_t i = 0; i < n; ++i) {
+            unsigned b = (unsigned)((srcK[i] >> shift) & 0xFFu);
+            size_t pos = count[b]++;
+            dstK[pos] = srcK[i];
+            dstV[pos] = srcV[i];
+        }
+        // swap src/dst
+        uint64_t *tk = srcK; srcK = dstK; dstK = tk;
+        uint32_t *tv = srcV; srcV = dstV; dstV = tv;
+    }
+
+    // After 8 passes, data is in srcK/srcV
+    free(keys2);
+    free(vals2);
+    result.keys   = srcK;  // == keys
+    result.values = srcV;  // == vals
+    return result;
+}
