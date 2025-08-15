@@ -77,12 +77,7 @@ static inline uint32_t GET_SKETCHING_ID(uint64_t v1, uint64_t v2, uint64_t v3 ,u
 
 //test
 
-// Full keep (for when you want stronger uniformity than raw low bits)
-static inline int keep_full(uint64_t unictx, uint64_t mask) {
-    return ((mix64(unictx) & mask) == 0);
-}
-
-
+/*
 #include <immintrin.h> // for _pext_u64/_pdep_u64
 
 static inline int has_bmi2(void){
@@ -94,21 +89,12 @@ static inline int has_bmi2(void){
 #endif
 }
 
-static inline uint64_t extract_context_compact(uint64_t unituple, uint64_t ctxmask){
-#if defined(__x86_64__)
-    if (__builtin_cpu_supports("bmi2")) {
-        return _pext_u64(unituple, ctxmask);  // compact context bits
-    }
-#endif
-    // Fallback: just mask (no compaction). Still correct.
-    return (unituple & ctxmask);
-}
 
-static inline uint64_t make_ctxobj(uint64_t unituple, uint64_t tuplemask, uint64_t ctxmask, uint8_t nobjbits){
+static inline uint64_t make_ctxobj(uint64_t unituple, uint64_t tupmask, uint64_t ctxmask, uint8_t nobjbits){
 #if defined(__x86_64__)
     if (__builtin_cpu_supports("bmi2")) {
         uint64_t ctx = _pext_u64(unituple, ctxmask);
-        uint64_t obj = _pext_u64(unituple, tuplemask & ~ctxmask );
+        uint64_t obj = _pext_u64(unituple, tupmask & ~ctxmask );
         // Choose a stable layout; high=ctx, low=obj:
         //make sure obj occupy lowest nobjbits bits 
         return (ctx << nobjbits) | obj;
@@ -116,10 +102,59 @@ static inline uint64_t make_ctxobj(uint64_t unituple, uint64_t tuplemask, uint64
     }
 #endif
     // Fallback to your existing packer
-    return uint64kmer2generic_ctxobj(unituple & tupmask);
+    return uint64kmer2generic_ctxobj(unituple);
 }
 
 //<-test
+*/
+
+// ----- make_ctxobj_fast.h ----------------------------------------------------
+#pragma once
+
+#if defined(__x86_64__)
+  #include <immintrin.h>   // _pext_u64
+#endif
+
+// ======================= FASTEST: BMI2 path (if available) ===================
+// Compile this function for BMI2 only; caller doesn’t need -mbmi2 globally.
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+__attribute__((target("bmi2"), always_inline))
+static inline uint64_t make_ctxobj_bmi2(uint64_t unituple, uint64_t tuplemask, uint64_t ctxmask, uint8_t  nobjbits)
+{
+    const uint64_t ctx = _pext_u64(unituple, ctxmask);
+    const uint64_t obj = _pext_u64(unituple, tuplemask & ~ctxmask);
+    // Ensure object occupies exactly the low nobjbits (cheap mask)
+    return (ctx << nobjbits) | (obj);
+}
+#endif
+
+// ====================== BASELINE: portable fallback path ======================
+__attribute__((always_inline))
+static inline uint64_t make_ctxobj_baseline(uint64_t unituple){
+    return uint64kmer2generic_ctxobj(unituple );
+}
+
+// ========================= PUBLIC ENTRY (fast + portable) ====================
+__attribute__((always_inline))
+static inline uint64_t make_ctxobj(uint64_t unituple, uint64_t tuplemask, int64_t ctxmask, uint8_t  nobjbits)
+{
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+    // Cache the CPU feature check (no per-call overhead).
+    static int inited = 0;
+    static int has_bmi2 = 0;
+    if (!inited) {
+        has_bmi2 = __builtin_cpu_supports("bmi2");
+        __atomic_store_n(&inited, 1, __ATOMIC_RELAXED);
+    }
+    if (has_bmi2) {
+        return make_ctxobj_bmi2(unituple, tuplemask, ctxmask, nobjbits);
+    }
+#endif
+    return make_ctxobj_baseline(unituple);
+}
+
+
+//
 //initialize funs
 //void public_vars_init(dim_sketch_stat_t* sketch_stat_raw) ; //initla global vars from sketch subcommand pars before sketch generated
 
@@ -141,5 +176,5 @@ void mfa2sortedctxobj64( sketch_opt_t * sketch_opt_val, infile_tab_t* infile_sta
 //void print_hash_table(khash_t(kmer_hash) *h);
 void write_sketch_stat (const char* outdir, infile_tab_t* infile_stat);
 simple_sketch_t* simple_genomes2mem2sortedctxobj64_mem (infile_tab_t *infile_stat, int drfold);
-
+void sketch_genomes_hybrid(sketch_opt_t *opt, infile_tab_t *tab, int batch_size);
 #endif

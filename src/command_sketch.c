@@ -3,6 +3,13 @@
 #include "kssdlib_sort.h"
 #include <time.h>
 
+#ifndef likely
+#  define likely(x)   __builtin_expect(!!(x),1)
+#endif
+#ifndef unlikely
+#  define unlikely(x) __builtin_expect(!!(x),0)
+#endif
+
 // shared global vars
 const char sketch_stat[] = "lcofiles.stat";
 const char sketch_suffix[] = "lco"; // long co, 64bits
@@ -17,6 +24,8 @@ dim_sketch_stat_t comblco_stat_one, comblco_stat_it;
 static size_t file_size;
 static char tmp_fname[PATHLEN + 20];
 static struct stat tmpstat;
+
+
 // functions
 void test_read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val,
                                      infile_tab_t *infile_stat,
@@ -44,8 +53,9 @@ void compute_sketch(sketch_opt_t *sketch_opt_val, infile_tab_t *infile_stat)
         mfa2sortedctxobj64(sketch_opt_val, infile_stat);
         return;
     }
-    test_read_genomes2mem2sortedctxobj64(sketch_opt_val, infile_stat, 1000);
+    //test_read_genomes2mem2sortedctxobj64(sketch_opt_val, infile_stat, 1000);
     //read_genomes2mem2sortedctxobj64(sketch_opt_val, infile_stat, 1000);
+    sketch_genomes_hybrid(sketch_opt_val, infile_stat, 1000);
     return; 
     // 20150724: i am not sure if below code is still needed, since we have read_genomes2mem2sortedctxobj64() to handle all cases
     // normal sketching mode
@@ -1152,7 +1162,7 @@ void test_read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val, infile_t
             } // end reads
 
             // finalize this genome: sort + (optionally) remove conflicts
-            SortedKV_Arrays_t lco_ab = sort_khash_u64(h);
+            SortedKV_Arrays_t lco_ab = gpt_sort_khash_u64(h);//sort_khash_u64(h);
             if (!sketch_opt_val->conflict)
                 remove_ctx_with_conflict_obj(&lco_ab, nobjbits);
 
@@ -1201,3 +1211,266 @@ void test_read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val, infile_t
 
     write_sketch_stat(sketch_opt_val->outdir, infile_stat);
 }
+
+// 
+// Hybrid sketcher: per-genome parallel when many files; otherwise in-file parallel.
+// Requires your existing repo symbols/types/macros:
+// - sketch_opt_t, infile_tab_t, Bitslen.obj, klen, ctxmask, tupmask
+// - Basemap[], DEFAULT
+// - remove_ctx_with_conflict_obj(), gpt_sort_khash_u64()
+// - write_to_file(), write_sketch_stat(), format_string()
+// - combined_sketch_suffix, idx_sketch_suffix
+// - kseq.h / zlib, khash sort64: KHASH_MAP_INIT_INT64(sort64, uint32_t)
+// - err()
+
+
+//KSEQ_INIT(gzFile, gzread)
+//KHASH_MAP_INIT_INT64(sort64, uint32_t)
+// Single hot-loop helper: sketches ONE read into map `h`.
+// Marked inline so the compiler can inline in both callers.
+static inline void sketch_read_into_map(const char *restrict s, int len,
+                     khash_t(sort64) *restrict h,
+                     uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits,
+                     uint32_t klen)
+{
+    const uint32_t len_mv = (uint32_t)(2*klen - 2);
+    if (len < (int)klen) return;
+
+    uint64_t tuple = 0, crv = 0;
+    int base = 0;
+
+    for (int pos = 0; pos < len; ++pos) {
+        const int bmap = Basemap[(unsigned char)s[pos]];
+        if (unlikely(bmap == DEFAULT)) { base = 0; tuple = 0; crv = 0; continue; }
+
+        const uint64_t b2 = (uint64_t)bmap;
+        tuple = (tuple << 2) | b2;
+        crv   = (crv   >> 2) | ((b2 ^ 3ull) << len_mv);
+        if (unlikely(++base < (int)klen)) continue;
+
+        uint64_t unituple,unictx, t_ctx = (tuple & ctxmask), r_ctx = (crv   & ctxmask);
+
+        if(t_ctx < r_ctx){
+            unituple = tuple & tupmask;
+            unictx = t_ctx;
+        } else{
+            unituple = crv & tupmask;
+            unictx = r_ctx;
+        }            
+        if (SKETCH_HASH(unictx) > FILTER) continue;
+
+        if (unlikely(SKETCH_HASH(unictx) > FILTER)) continue;
+        const uint64_t ctxobj = make_ctxobj(unituple, tupmask, ctxmask, nobjbits);
+        int ret; khint_t k = kh_put(sort64, h, ctxobj, &ret);
+        if (ret) kh_value(h, k) = 1;
+    }
+};
+
+// ---- In-file parallel helpers (used only when #files < threads) ----
+typedef struct { char *s; int l; } read_span_t;
+
+static inline void free_batch(read_span_t *R, int n) {
+    for (int i = 0; i < n; ++i) free(R[i].s);
+}
+
+// Process a batch of reads in parallel (fan-out across threads).
+static void process_batch_reads(read_span_t *R, int n,  sketch_opt_t *opt,uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits, khash_t(sort64) **H_shard, int nshard)
+{
+    #pragma omp parallel for num_threads(opt->p) schedule(static)
+    for (int ri = 0; ri < n; ++ri) {
+    khash_t(sort64) *h = H_shard[((uintptr_t)R[ri].s >> 4) & (nshard - 1)];
+    sketch_read_into_map(R[ri].s, R[ri].l, h, ctxmask, tupmask, nobjbits,klen);
+    }
+}
+
+// Merge shards into one map and sort with your fast sorter.
+static SortedKV_Arrays_t merge_shards_and_sort(khash_t(sort64) **H_shard, int nshard) {
+    khash_t(sort64) *H = kh_init(sort64);
+    size_t tot = 0;
+    for (int s = 0; s < nshard; ++s) tot += kh_size(H_shard[s]);
+    kh_resize(sort64, H, tot ? tot : 4);
+
+    for (int s = 0; s < nshard; ++s) {
+        for (khiter_t it = kh_begin(H_shard[s]); it != kh_end(H_shard[s]); ++it) {
+            if (!kh_exist(H_shard[s], it)) continue;
+            uint64_t key = kh_key(H_shard[s], it);
+            int ret; khint_t k = kh_put(sort64, H, key, &ret);
+            if (ret) kh_value(H, k) = 1;
+        }
+    }
+    SortedKV_Arrays_t out = gpt_sort_khash_u64(H);
+    kh_destroy(sort64, H);
+    return out;
+}
+
+// ---- Mode A: per-genome parallel (your improved fast path, one thread per file) ----
+static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, int batch_size)
+{
+    const int nfiles = tab->infile_num;
+
+    // combined output + index
+    FILE *comb = fopen(format_string("%s/%s", opt->outdir, combined_sketch_suffix), "wb");
+    if (!comb) err(errno, "%s() open comb", __func__);
+    setvbuf(comb, NULL, _IOFBF, 8u<<20);
+
+    uint64_t *sketch_index = (uint64_t*)calloc((size_t)nfiles + 1, sizeof(uint64_t));
+    if (!sketch_index) err(errno, "%s(): OOM index", __func__);
+
+    // Process in batches of files to cap memory if needed
+    for (int batch_start = 0; batch_start < nfiles; batch_start += batch_size) {
+        const int batch_end  = (batch_start + batch_size <= nfiles) ? (batch_start + batch_size) : nfiles;
+        const int this_batch = batch_end - batch_start;
+
+        uint64_t *lens = (uint64_t*)calloc((size_t)this_batch, sizeof(uint64_t));
+        if (!lens) err(errno, "%s(): OOM lens", __func__);
+
+        uint64_t **batch_sketches = (uint64_t**)calloc((size_t)this_batch, sizeof(uint64_t*));
+        if (!batch_sketches) err(errno, "%s(): OOM batch_sketches", __func__);
+
+        #pragma omp parallel for num_threads(opt->p) schedule(dynamic,1)
+        for (int bi = 0; bi < this_batch; ++bi) {
+            const int file_idx = batch_start + bi;
+            const char *fpath  = tab->organized_infile_tab[file_idx].fpath;
+
+            gzFile infile = gzopen(fpath, "r");
+            if (!infile) err(errno, "%s(): Cannot open %s", __func__, fpath);
+            (void)gzbuffer(infile, 4u<<20);
+
+            kseq_t *seq = kseq_init(infile);
+            if (!seq) err(errno, "%s(): kseq_init %s", __func__, fpath);
+
+            khash_t(sort64) *h = kh_init(sort64);
+            if (!h) err(errno, "%s(): kh_init OOM", __func__);
+            kh_resize(sort64, h, 1u<<15); // heuristic
+            
+            while (kseq_read(seq) >= 0) 
+                sketch_read_into_map(seq->seq.s, (int)seq->seq.l, h, ctxmask, tupmask, Bitslen.obj, klen);
+
+
+            SortedKV_Arrays_t lco_ab = gpt_sort_khash_u64(h);
+            if (!opt->conflict) remove_ctx_with_conflict_obj(&lco_ab, Bitslen.obj);
+
+            batch_sketches[bi] = lco_ab.keys;
+            lens[bi]           = lco_ab.len;
+
+            kh_destroy(sort64, h);
+            free(lco_ab.values);
+            kseq_destroy(seq);
+            gzclose(infile);
+        }
+
+        // write batch in order
+        for (int bi = 0; bi < this_batch; ++bi) {
+            const int gi = batch_start + bi;
+            sketch_index[gi + 1] = lens[bi];
+            if (lens[bi]) {
+                fwrite(batch_sketches[bi], sizeof(uint64_t), lens[bi], comb);
+                free(batch_sketches[bi]);
+            }
+        }
+        free(batch_sketches);
+        free(lens);
+
+        fprintf(stderr, "\r%d/%d genomes processed", batch_end, nfiles);
+        fflush(stderr);
+    }
+
+    // prefix sum index and flush
+    for (int i = 0; i < nfiles; ++i) sketch_index[i+1] += sketch_index[i];
+    write_to_file(format_string("%s/%s", opt->outdir, idx_sketch_suffix),
+                  sketch_index, (size_t)(nfiles + 1) * sizeof(sketch_index[0]));
+    fclose(comb);
+    free(sketch_index);
+    write_sketch_stat(opt->outdir, tab);
+}
+
+// ---- Mode B: in-file parallel (batch reads, fan-out, shards, merge) ----
+static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_tab_t *tab,
+                                                     int BATCH_READS, int NSHARD)
+{
+    const int nfiles = tab->infile_num;
+
+    FILE *comb = fopen(format_string("%s/%s", opt->outdir, combined_sketch_suffix), "wb");
+    if (!comb) err(errno, "%s() open comb", __func__);
+    setvbuf(comb, NULL, _IOFBF, 8u<<20);
+
+    uint64_t *sketch_index = (uint64_t*)calloc((size_t)nfiles + 1, sizeof(uint64_t));
+    if (!sketch_index) err(errno, "%s(): OOM index", __func__);
+
+    for (int f = 0; f < nfiles; ++f) {
+        const char *path = tab->organized_infile_tab[f].fpath;
+        gzFile in = gzopen(path, "r");
+        if (!in) err(errno, "%s(): Cannot open %s", __func__, path);
+        (void)gzbuffer(in, 4u<<20);
+        kseq_t *seq = kseq_init(in);
+
+        // per-file shards
+        if ((NSHARD & (NSHARD-1)) != 0) NSHARD = 8; // ensure power of two
+        khash_t(sort64) **H = (khash_t(sort64)**)malloc((size_t)NSHARD * sizeof(*H));
+        if (!H) err(errno, "%s(): OOM shards", __func__);
+        for (int s = 0; s < NSHARD; ++s) { H[s] = kh_init(sort64); kh_resize(sort64, H[s], 1u<<15); }
+
+        read_span_t *R = (read_span_t*)malloc((size_t)BATCH_READS * sizeof(*R));
+        if (!R) err(errno, "%s(): OOM batch", __func__);
+        int rcnt = 0;
+
+        while (kseq_read(seq) >= 0) {
+            char *buf = (char*)malloc(seq->seq.l + 1);
+            if (!buf) err(errno, "%s(): OOM read buf", __func__);
+            memcpy(buf, seq->seq.s, seq->seq.l);
+            buf[seq->seq.l] = '\0';
+            R[rcnt].s = buf; R[rcnt].l = (int)seq->seq.l;
+            if (++rcnt < BATCH_READS) continue;
+
+            process_batch_reads(R, rcnt, opt, ctxmask, tupmask, Bitslen.obj, H, NSHARD);
+            free_batch(R, rcnt); rcnt = 0;
+        }
+        if (rcnt) { process_batch_reads(R, rcnt, opt, ctxmask, tupmask, Bitslen.obj, H, NSHARD);
+                    free_batch(R, rcnt); }
+        free(R);
+
+        SortedKV_Arrays_t lco_ab = merge_shards_and_sort(H, NSHARD);
+        for (int s = 0; s < NSHARD; ++s) kh_destroy(sort64, H[s]);
+        free(H);
+
+        if (!opt->conflict) remove_ctx_with_conflict_obj(&lco_ab, Bitslen.obj);
+
+        sketch_index[f+1] = lco_ab.len;
+        if (lco_ab.len) fwrite(lco_ab.keys, sizeof(uint64_t), lco_ab.len, comb);
+        free(lco_ab.keys); free(lco_ab.values);
+
+        kseq_destroy(seq);
+        gzclose(in);
+
+        fprintf(stderr, "\r%d/%d genomes processed", f+1, nfiles);
+        fflush(stderr);
+    }
+
+    for (int i = 0; i < nfiles; ++i) sketch_index[i+1] += sketch_index[i];
+    write_to_file(format_string("%s/%s", opt->outdir, idx_sketch_suffix),
+                  sketch_index, (size_t)(nfiles + 1) * sizeof(sketch_index[0]));
+    fclose(comb);
+    free(sketch_index);
+    write_sketch_stat(opt->outdir, tab);
+}
+
+// ---- Public hybrid entry: call this instead of your old function ----
+static inline int hw_threads(const sketch_opt_t *opt) { return opt->p > 0 ? opt->p : 1; }
+
+void sketch_genomes_hybrid(sketch_opt_t *opt, infile_tab_t *tab, int batch_size)
+{
+    const int nfiles = tab->infile_num;
+    const int nth    = hw_threads(opt);
+
+    if (nfiles >= nth) {
+        // many files → per-genome parallel (no extra copies)
+        sketch_many_files_in_parallel(opt, tab, batch_size);
+    } else {
+        // few files → in-file parallelism to saturate cores
+        // You can tune these two knobs:
+        const int BATCH_READS = 8192;  // 8k reads per batch
+        const int NSHARD      = 8;     // number of per-file khash shards (power of two)
+        sketch_few_files_with_intrafile_parallel(opt, tab, BATCH_READS, NSHARD);
+    }
+}
+
