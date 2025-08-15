@@ -1230,6 +1230,9 @@ void test_read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val, infile_t
 // Marked inline so the compiler can inline in both callers.
 #include <omp.h>
 
+// ---- In-file parallel helpers (used only when #files < threads) ----
+typedef struct { char *s; int l; } read_span_t;
+
 static inline void sketch_read_into_map(const char *restrict s, int len,
                      khash_t(sort64) *restrict h,
                      uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits,
@@ -1267,9 +1270,6 @@ static inline void sketch_read_into_map(const char *restrict s, int len,
         if (ret) kh_value(h, k) = 1;
     }
 };
-
-// ---- In-file parallel helpers (used only when #files < threads) ----
-typedef struct { char *s; int l; } read_span_t;
 
 static inline void free_batch(read_span_t *R, int n) {
     for (int i = 0; i < n; ++i) free(R[i].s);
@@ -1386,17 +1386,99 @@ static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, 
     write_sketch_stat(opt->outdir, tab);
 }
 
-// ---- Mode B: in-file parallel (batch reads, per-thread maps, merge once) ----
-static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_tab_t *tab, int BATCH_READS, int /*NSHARD unused*/)
+// ---------- helpers used by Mode-B (vector + radix + RLE) ----------
+
+typedef struct { uint64_t *a; size_t n, cap; } u64vec;
+
+static inline void v_init(u64vec *v, size_t cap) {
+    v->a = cap ? (uint64_t*)malloc(cap * sizeof(uint64_t)) : NULL;
+    v->n = 0; v->cap = cap;
+}
+static inline void v_free(u64vec *v) { free(v->a); v->a=NULL; v->n=v->cap=0; }
+static inline void v_reserve(u64vec *v, size_t need) {
+    if (need > v->cap) {
+        size_t nc = v->cap ? v->cap : 8192;
+        while (nc < need) nc <<= 1;
+        v->a = (uint64_t*)realloc(v->a, nc * sizeof(uint64_t));
+        v->cap = nc;
+    }
+}
+static inline void v_push(u64vec *v, uint64_t x) {
+    if (v->n == v->cap) v_reserve(v, v->cap ? (v->cap<<1) : 8192);
+    v->a[v->n++] = x;
+}
+
+// 8-pass stable LSD radix sort on u64
+static inline void radix_sort_u64(uint64_t *keys, size_t n) {
+    if (n < 2) return;
+    uint64_t *tmp = (uint64_t*)malloc(n * sizeof(uint64_t));
+    size_t cnt[256];
+    for (unsigned pass = 0; pass < 8; ++pass) {
+        for (int i = 0; i < 256; ++i) cnt[i] = 0;
+        unsigned sh = pass * 8;
+        for (size_t i = 0; i < n; ++i) ++cnt[(keys[i] >> sh) & 0xFFu];
+        size_t sum = 0;
+        for (int i = 0; i < 256; ++i) { size_t c = cnt[i]; cnt[i] = sum; sum += c; }
+        for (size_t i = 0; i < n; ++i) tmp[cnt[(keys[i] >> sh) & 0xFFu]++] = keys[i];
+        // swap buffers
+        uint64_t *sw = keys; keys = tmp; tmp = sw;
+    }
+    free(tmp); // after 8 passes, sorted data is in `keys`
+}
+
+static inline size_t unique_inplace_u64(uint64_t *a, size_t n) {
+    if (n == 0) return 0;
+    size_t w = 1;
+    for (size_t i = 1; i < n; ++i) if (a[i] != a[w-1]) a[w++] = a[i];
+    return w;
+}
+
+// Reused hot loop: push kept ctxobj into a vector (no hashing)
+static inline void sketch_read_into_vec(const char *restrict s, int len,
+                                        u64vec *restrict vec,
+                                        uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits,
+                                        uint32_t klen)
+{
+    if (len < (int)klen) return;
+    const uint32_t len_mv = (uint32_t)(2*klen - 2);
+
+    uint64_t tuple = 0, crv = 0;
+    int base = 0;
+
+    for (int pos = 0; pos < len; ++pos) {
+        const int bmap = Basemap[(unsigned char)s[pos]];
+        if (unlikely(bmap == DEFAULT)) { base = 0; tuple = 0; crv = 0; continue; }
+
+        const uint64_t b2 = (uint64_t)bmap;
+        tuple = (tuple << 2) | b2;
+        crv   = (crv   >> 2) | ((b2 ^ 3ull) << len_mv);
+        if (unlikely(++base < (int)klen)) continue;
+
+        const uint64_t t_ctx = (tuple & ctxmask);
+        const uint64_t r_ctx = (crv   & ctxmask);
+        const int use_fwd    = (t_ctx < r_ctx);
+        const uint64_t unictx = use_fwd ? t_ctx : r_ctx;
+
+        if (unlikely(SKETCH_HASH(unictx) > FILTER)) continue;
+
+        const uint64_t unituple = (use_fwd ? tuple : crv) & tupmask;
+        const uint64_t ctxobj   = make_ctxobj(unituple, tupmask, ctxmask, nobjbits);
+        v_push(vec, ctxobj);
+    }
+}
+
+// ---- Mode B (vector + radix + counts): in-file parallel when #files < threads ----
+static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_tab_t *tab,
+                                                     int BATCH_READS)
 {
     const int nfiles = tab->infile_num;
 
     FILE *comb = fopen(format_string("%s/%s", opt->outdir, combined_sketch_suffix), "wb");
-    if (!comb) err(errno, "%s() open comb", __func__);
+    if (!comb) err(errno, "%s() open file error: %s/%s", __func__, opt->outdir, combined_sketch_suffix);
     setvbuf(comb, NULL, _IOFBF, 8u<<20);
 
     uint64_t *sketch_index = (uint64_t*)calloc((size_t)nfiles + 1, sizeof(uint64_t));
-    if (!sketch_index) err(errno, "%s(): OOM index", __func__);
+    if (!sketch_index) err(errno, "%s(): OOM sketch_index", __func__);
 
     for (int f = 0; f < nfiles; ++f) {
         const char *path = tab->organized_infile_tab[f].fpath;
@@ -1407,26 +1489,16 @@ static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_t
 
         typedef struct { char *s; int l; } read_span_t;
         read_span_t *R = (read_span_t*)malloc((size_t)BATCH_READS * sizeof(*R));
-        if (!R) err(errno, "%s(): OOM batch", __func__);
+        if (!R) err(errno, "%s(): OOM batch reads", __func__);
         int rcnt = 0;
 
-        // ----- per-thread maps for the whole file -----
-        int nth = opt->p > 0 ? opt->p : 1;
-        khash_t(sort64) **H_thr = (khash_t(sort64)**)malloc((size_t)nth * sizeof(*H_thr));
-        if (!H_thr) err(errno, "%s(): OOM H_thr", __func__);
-        for (int t = 0; t < nth; ++t) {
-            H_thr[t] = kh_init(sort64);
-            kh_resize(sort64, H_thr[t], 1u<<15); // heuristic
-        }
+        // per-file per-thread vectors
+        const int nth = (opt->p > 0 ? opt->p : 1);
+        u64vec *V_thr = (u64vec*)malloc((size_t)nth * sizeof(u64vec));
+        if (!V_thr) err(errno, "%s(): OOM V_thr", __func__);
+        for (int t = 0; t < nth; ++t) v_init(&V_thr[t], 1u<<15); // heuristic
 
-        const uint32_t len_mv = (uint32_t)(2*klen - 2);
-#if defined(__x86_64__)
-        const int has_bmi2 = __builtin_cpu_supports("bmi2");
-#else
-        const int has_bmi2 = 0;
-#endif
-
-        // --------- read loop: fill batch, process when full ----------
+        // Read batches, process in parallel into per-thread vectors
         while (kseq_read(seq) >= 0) {
             char *buf = (char*)malloc(seq->seq.l + 1);
             if (!buf) err(errno, "%s(): OOM read buf", __func__);
@@ -1435,70 +1507,19 @@ static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_t
             R[rcnt].s = buf; R[rcnt].l = (int)seq->seq.l;
 
             if (++rcnt >= BATCH_READS) {
-                // process this batch in parallel into per-thread maps
                 #pragma omp parallel for num_threads(opt->p) schedule(static)
                 for (int ri = 0; ri < rcnt; ++ri) {
                     int tid = 0;
 #ifdef _OPENMP
                     tid = omp_get_thread_num();
 #endif
-                    khash_t(sort64) *h = H_thr[tid];
-
-                    const char *sseq = R[ri].s;
-                    const int   len  = R[ri].l;
-                    if (len < klen) continue;
-
-                    uint64_t tuple = 0, crv = 0;
-                    int base = 0;
-
-                    for (int pos = 0; pos < len; ++pos) {
-                        const int bmap = Basemap[(unsigned char)sseq[pos]];
-                        if (bmap == DEFAULT) { base = 0; tuple=0; crv=0; continue; }
-
-                        const uint64_t b2 = (uint64_t)bmap;
-                        tuple = (tuple << 2) | b2;
-                        crv   = (crv   >> 2) | ((b2 ^ 3ull) << len_mv);
-                        if (++base < klen) continue;
-
-                        uint64_t t_ctx, r_ctx;
-                        if (has_bmi2) {
-#if defined(__x86_64__)
-                            t_ctx = _pext_u64(tuple, ctxmask);
-                            r_ctx = _pext_u64(crv,   ctxmask);
-#endif
-                        } else {
-                            t_ctx = (tuple & ctxmask);
-                            r_ctx = (crv   & ctxmask);
-                        }
-                        uint64_t unituple = (t_ctx < r_ctx) ? tuple : crv;
-                        const uint64_t unictx = (t_ctx < r_ctx) ? t_ctx : r_ctx;
-
-#ifdef SKETCH_HASH
-                        if (SKETCH_HASH(unictx) > FILTER) continue;
-#endif
-                        unituple &= tupmask;
-
-                        uint64_t ctxobj;
-                        if (has_bmi2) {
-#if defined(__x86_64__)
-                            ctxobj = ( _pext_u64(unituple, ctxmask) << Bitslen.obj )
-                                   | (_pext_u64(unituple, ~ctxmask) & ((1ULL<<Bitslen.obj)-1));
-#endif
-                        } else {
-                            ctxobj = uint64kmer2generic_ctxobj(unituple & tupmask);
-                        }
-
-                        int ret; khint_t k = kh_put(sort64, h, ctxobj, &ret);
-                        if (ret) kh_value(h, k) = 1;
-                    }
+                    sketch_read_into_vec(R[ri].s, R[ri].l, &V_thr[tid],
+                                         ctxmask, tupmask, Bitslen.obj, klen);
                 }
-
-                // free this batch’s read buffers and reset counter
                 for (int i = 0; i < rcnt; ++i) free(R[i].s);
                 rcnt = 0;
             }
         }
-
         // tail batch
         if (rcnt) {
             #pragma omp parallel for num_threads(opt->p) schedule(static)
@@ -1507,85 +1528,67 @@ static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_t
 #ifdef _OPENMP
                 tid = omp_get_thread_num();
 #endif
-                khash_t(sort64) *h = H_thr[tid];
-
-                const char *sseq = R[ri].s;
-                const int   len  = R[ri].l;
-                if (len < klen) continue;
-
-                uint64_t tuple = 0, crv = 0;
-                int base = 0;
-
-                for (int pos = 0; pos < len; ++pos) {
-                    const int bmap = Basemap[(unsigned char)sseq[pos]];
-                    if (bmap == DEFAULT) { base = 0; tuple=0; crv=0; continue; }
-
-                    const uint64_t b2 = (uint64_t)bmap;
-                    tuple = (tuple << 2) | b2;
-                    crv   = (crv   >> 2) | ((b2 ^ 3ull) << len_mv);
-                    if (++base < klen) continue;
-
-                    uint64_t t_ctx, r_ctx;
-                    if (has_bmi2) {
-#if defined(__x86_64__)
-                        t_ctx = _pext_u64(tuple, ctxmask);
-                        r_ctx = _pext_u64(crv,   ctxmask);
-#endif
-                    } else {
-                        t_ctx = (tuple & ctxmask);
-                        r_ctx = (crv   & ctxmask);
-                    }
-                    uint64_t unituple = (t_ctx < r_ctx) ? tuple : crv;
-                    const uint64_t unictx = (t_ctx < r_ctx) ? t_ctx : r_ctx;
-
-#ifdef SKETCH_HASH
-                    if (SKETCH_HASH(unictx) > FILTER) continue;
-#endif
-                    unituple &= tupmask;
-
-                    uint64_t ctxobj;
-                    if (has_bmi2) {
-#if defined(__x86_64__)
-                        ctxobj = ( _pext_u64(unituple, ctxmask) << Bitslen.obj )
-                               | (_pext_u64(unituple, ~ctxmask) & ((1ULL<<Bitslen.obj)-1));
-#endif
-                    } else {
-                        ctxobj = uint64kmer2generic_ctxobj(unituple & tupmask);
-                    }
-
-                    int ret; khint_t k = kh_put(sort64, h, ctxobj, &ret);
-                    if (ret) kh_value(h, k) = 1;
-                }
+                sketch_read_into_vec(R[ri].s, R[ri].l, &V_thr[tid],
+                                     ctxmask, tupmask, Bitslen.obj, klen);
             }
             for (int i = 0; i < rcnt; ++i) free(R[i].s);
             rcnt = 0;
         }
         free(R);
 
-        // ---- merge per-thread maps → one map; sort; write; free ----
-        size_t total = 0;
-        for (int t = 0; t < nth; ++t) total += kh_size(H_thr[t]);
-        khash_t(sort64) *H = kh_init(sort64);
-        kh_resize(sort64, H, total ? total : 4);
-
+        // Optional shrink: per-thread sort+unique to reduce memory before concat
         for (int t = 0; t < nth; ++t) {
-            for (khiter_t it = kh_begin(H_thr[t]); it != kh_end(H_thr[t]); ++it) {
-                if (!kh_exist(H_thr[t], it)) continue;
-                const uint64_t key = kh_key(H_thr[t], it);
-                int ret; khint_t k = kh_put(sort64, H, key, &ret);
-                if (ret) kh_value(H, k) = 1;
-            }
-            kh_destroy(sort64, H_thr[t]);
+            radix_sort_u64(V_thr[t].a, V_thr[t].n);
+            V_thr[t].n = unique_inplace_u64(V_thr[t].a, V_thr[t].n);
         }
-        free(H_thr);
 
-        SortedKV_Arrays_t lco_ab = gpt_sort_khash_u64(H);
-        kh_destroy(sort64, H);
+        // Concatenate all thread vectors
+        size_t total = 0;
+        for (int t = 0; t < nth; ++t) total += V_thr[t].n;
 
-        if (!opt->conflict) remove_ctx_with_conflict_obj(&lco_ab, Bitslen.obj);
+        uint64_t *all = (uint64_t*)malloc(total * sizeof(uint64_t));
+        if (!all) err(errno, "%s(): OOM concat buffer", __func__);
 
+        size_t off = 0;
+        for (int t = 0; t < nth; ++t) {
+            if (V_thr[t].n) {
+                memcpy(all + off, V_thr[t].a, V_thr[t].n * sizeof(uint64_t));
+                off += V_thr[t].n;
+            }
+            v_free(&V_thr[t]);
+        }
+        free(V_thr);
+
+        // Global sort once and RLE → SortedKV_Arrays_t (keys + counts)
+        radix_sort_u64(all, total);
+
+        int64_t *out_keys = (int64_t*)malloc(total * sizeof(int64_t)); // worst case length
+        int     *out_vals = (int*)    malloc(total * sizeof(int));
+        if (!out_keys || !out_vals) err(errno, "%s(): OOM kv arrays", __func__);
+
+        size_t w = 0;
+        for (size_t i = 0; i < total; ) {
+            uint64_t k = all[i];
+            size_t j = i + 1;
+            while (j < total && all[j] == k) ++j;
+            out_keys[w] = (int64_t)k;         // SortedKV_Arrays_t uses int64_t*
+            out_vals[w] = (int)(j - i);       // occurrences
+            ++w;
+            i = j;
+        }
+        free(all);
+
+        SortedKV_Arrays_t lco_ab = { .keys = out_keys, .values = out_vals, .len = w };
+
+        // conflict filtering that needs counts
+        if (!opt->conflict)
+            remove_ctx_with_conflict_obj(&lco_ab, Bitslen.obj);
+
+        // write keys (same combined_sketch format), update index
         sketch_index[f+1] = lco_ab.len;
-        if (lco_ab.len) fwrite(lco_ab.keys, sizeof(uint64_t), lco_ab.len, comb);
+        if (lco_ab.len)
+            fwrite(lco_ab.keys, sizeof(int64_t), lco_ab.len, comb);
+
         free(lco_ab.keys);
         free(lco_ab.values);
 
@@ -1596,6 +1599,7 @@ static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_t
         fflush(stderr);
     }
 
+    // Build prefix-sum index and flush index file
     for (int i = 0; i < nfiles; ++i) sketch_index[i+1] += sketch_index[i];
     write_to_file(format_string("%s/%s", opt->outdir, idx_sketch_suffix),
                   sketch_index, (size_t)(nfiles + 1) * sizeof(sketch_index[0]));
@@ -1603,93 +1607,20 @@ static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_t
     free(sketch_index);
     write_sketch_stat(opt->outdir, tab);
 }
-
-static void old_sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_tab_t *tab,
-                                                     int BATCH_READS, int NSHARD)
-{
-    const int nfiles = tab->infile_num;
-
-    FILE *comb = fopen(format_string("%s/%s", opt->outdir, combined_sketch_suffix), "wb");
-    if (!comb) err(errno, "%s() open comb", __func__);
-    setvbuf(comb, NULL, _IOFBF, 8u<<20);
-
-    uint64_t *sketch_index = (uint64_t*)calloc((size_t)nfiles + 1, sizeof(uint64_t));
-    if (!sketch_index) err(errno, "%s(): OOM index", __func__);
-
-    for (int f = 0; f < nfiles; ++f) {
-        const char *path = tab->organized_infile_tab[f].fpath;
-        gzFile in = gzopen(path, "r");
-        if (!in) err(errno, "%s(): Cannot open %s", __func__, path);
-        (void)gzbuffer(in, 4u<<20);
-        kseq_t *seq = kseq_init(in);
-
-        // per-file shards
-        if ((NSHARD & (NSHARD-1)) != 0) NSHARD = 8; // ensure power of two
-        khash_t(sort64) **H = (khash_t(sort64)**)malloc((size_t)NSHARD * sizeof(*H));
-        if (!H) err(errno, "%s(): OOM shards", __func__);
-        for (int s = 0; s < NSHARD; ++s) { H[s] = kh_init(sort64); kh_resize(sort64, H[s], 1u<<15); }
-
-        read_span_t *R = (read_span_t*)malloc((size_t)BATCH_READS * sizeof(*R));
-        if (!R) err(errno, "%s(): OOM batch", __func__);
-        int rcnt = 0;
-
-        while (kseq_read(seq) >= 0) {
-            char *buf = (char*)malloc(seq->seq.l + 1);
-            if (!buf) err(errno, "%s(): OOM read buf", __func__);
-            memcpy(buf, seq->seq.s, seq->seq.l);
-            buf[seq->seq.l] = '\0';
-            R[rcnt].s = buf; R[rcnt].l = (int)seq->seq.l;
-            if (++rcnt < BATCH_READS) continue;
-
-            process_batch_reads(R, rcnt, opt, ctxmask, tupmask, Bitslen.obj, H, NSHARD);
-            free_batch(R, rcnt); rcnt = 0;
-        }
-        if (rcnt) { process_batch_reads(R, rcnt, opt, ctxmask, tupmask, Bitslen.obj, H, NSHARD);
-                    free_batch(R, rcnt); }
-        free(R);
-
-        SortedKV_Arrays_t lco_ab = merge_shards_and_sort(H, NSHARD);
-        for (int s = 0; s < NSHARD; ++s) kh_destroy(sort64, H[s]);
-        free(H);
-
-        if (!opt->conflict) remove_ctx_with_conflict_obj(&lco_ab, Bitslen.obj);
-
-        sketch_index[f+1] = lco_ab.len;
-        if (lco_ab.len) fwrite(lco_ab.keys, sizeof(uint64_t), lco_ab.len, comb);
-        free(lco_ab.keys); free(lco_ab.values);
-
-        kseq_destroy(seq);
-        gzclose(in);
-
-        fprintf(stderr, "\r%d/%d genomes processed", f+1, nfiles);
-        fflush(stderr);
-    }
-
-    for (int i = 0; i < nfiles; ++i) sketch_index[i+1] += sketch_index[i];
-    write_to_file(format_string("%s/%s", opt->outdir, idx_sketch_suffix),
-                  sketch_index, (size_t)(nfiles + 1) * sizeof(sketch_index[0]));
-    fclose(comb);
-    free(sketch_index);
-    write_sketch_stat(opt->outdir, tab);
-}
-
-// ---- Public hybrid entry: call this instead of your old function ----
-static inline int hw_threads(const sketch_opt_t *opt) { return opt->p > 0 ? opt->p : 1; }
 
 void sketch_genomes_hybrid(sketch_opt_t *opt, infile_tab_t *tab, int batch_size)
 {
     const int nfiles = tab->infile_num;
-    const int nth    = hw_threads(opt);
 
-    if (nfiles >= nth) {
-        // many files → per-genome parallel (no extra copies)
+    // Decide mode based on #files vs. threads
+    if (nfiles >= opt->p) {
+        // Mode-A: per-file parallel
+        //sketch_many_files_with_perfile_parallel(opt, tab, batch_size);
         sketch_many_files_in_parallel(opt, tab, batch_size);
     } else {
-        // few files → in-file parallelism to saturate cores
-        // You can tune these two knobs:
-        const int BATCH_READS = 8192;  // 8k reads per batch
-        const int NSHARD      = 8;     // number of per-file khash shards (power of two)
-        sketch_few_files_with_intrafile_parallel(opt, tab, BATCH_READS, NSHARD);
+        // Mode-B: in-file parallel
+        sketch_few_files_with_intrafile_parallel(opt, tab, batch_size);
     }
 }
+
 
