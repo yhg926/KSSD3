@@ -31,4 +31,36 @@ SortedKV_Arrays_t gpt_sort_khash_u64(khash_t(sort64) *h);
 void filter_n_SortedKV_Arrays(SortedKV_Arrays_t *result, uint32_t n);
 void remove_ctx_with_conflict_obj (SortedKV_Arrays_t *data, uint32_t n_obj_bits);
 //void free_SortedKV_Arrays (SortedKV_Arrays_t *result);
+
+
+// 8-pass stable LSD radix sort on u64
+static inline void radix_sort_u64(uint64_t *keys, size_t n){
+    if (n < 2) return;
+    uint64_t *tmp = (uint64_t*)malloc(n*sizeof(uint64_t));
+    size_t cnt[256];
+    for (unsigned pass=0; pass<8; ++pass){
+        for (int i=0;i<256;++i) cnt[i]=0;
+        unsigned sh = pass*8;
+        for (size_t i=0;i<n;++i) ++cnt[(keys[i]>>sh)&0xFFu];
+        size_t sum=0;
+        for (int i=0;i<256;++i){ size_t c=cnt[i]; cnt[i]=sum; sum+=c; }
+        for (size_t i=0;i<n;++i) tmp[cnt[(keys[i]>>sh)&0xFFu]++] = keys[i];
+        uint64_t *sw = keys; keys = tmp; tmp = sw;
+    }
+    free(tmp);
+}
+
+static inline size_t unique_inplace_u64(uint64_t *a, size_t n)
+{
+    if (n == 0)
+        return 0;
+    size_t w = 1;
+    for (size_t i = 1; i < n; ++i)
+        if (a[i] != a[w - 1])
+            a[w++] = a[i];
+    return w;
+}
+
+
+
 #endif 

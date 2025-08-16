@@ -327,7 +327,7 @@ void free_all(void *first, ...);
 #define HASH(K, I, HASH_SZ) ((H1(K, HASH_SZ) + I * H2(K, HASH_SZ)) % HASH_SZ)
 #define LOG2(X) ((unsigned)(8 * sizeof(unsigned long long) - __builtin_clzll((X)) - 1))
 
-// vector type and methods
+// general vector type and methods
 typedef struct
 {
   void *data;          // Pointer to the array data
@@ -341,6 +341,40 @@ void vector_free(Vector *vec);
 void vector_push(Vector *vec, const void *element);
 void *vector_get(Vector *vec, size_t index);
 void vector_reserve(Vector *v, size_t new_capacity);
+
+//u64vec vector 
+typedef struct{uint64_t *a;size_t n, cap;} u64vec;
+
+static inline void v_init(u64vec *v, size_t cap)
+{
+    v->a = cap ? (uint64_t *)malloc(cap * sizeof(uint64_t)) : NULL;
+    v->n = 0;
+    v->cap = cap;
+}
+static inline void v_free(u64vec *v)
+{
+    free(v->a);
+    v->a = NULL;
+    v->n = v->cap = 0;
+}
+static inline void v_reserve(u64vec *v, size_t need)
+{
+    if (need > v->cap)
+    {
+        size_t nc = v->cap ? v->cap : 8192;
+        while (nc < need)
+            nc <<= 1;
+        v->a = (uint64_t *)realloc(v->a, nc * sizeof(uint64_t));
+        v->cap = nc;
+    }
+}
+static inline void v_push(u64vec *v, uint64_t x)
+{
+    if (v->n == v->cap)
+        v_reserve(v, v->cap ? (v->cap << 1) : 8192);
+    v->a[v->n++] = x;
+}
+
 // union type for both combco and comblco sketch
 typedef struct
 {
