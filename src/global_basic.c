@@ -19,7 +19,7 @@
 
 /*global basemap and mapbase*/
 #if ALPHABET == 1 // objs compatible mode
-const int Basemap[128] =
+static const int Basemap[128] =
     {
         // make sure its ok illegal base letter has same behavial with null base
         [0 ... 127] = DEFAULT,

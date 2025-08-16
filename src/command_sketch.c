@@ -1420,10 +1420,9 @@ static inline void radix_sort_u64(uint64_t *keys, size_t n) {
         size_t sum = 0;
         for (int i = 0; i < 256; ++i) { size_t c = cnt[i]; cnt[i] = sum; sum += c; }
         for (size_t i = 0; i < n; ++i) tmp[cnt[(keys[i] >> sh) & 0xFFu]++] = keys[i];
-        // swap buffers
         uint64_t *sw = keys; keys = tmp; tmp = sw;
     }
-    free(tmp); // after 8 passes, sorted data is in `keys`
+    free(tmp);
 }
 
 static inline size_t unique_inplace_u64(uint64_t *a, size_t n) {
@@ -1433,7 +1432,7 @@ static inline size_t unique_inplace_u64(uint64_t *a, size_t n) {
     return w;
 }
 
-// Reused hot loop: push kept ctxobj into a vector (no hashing)
+// Hot loop: push kept ctxobj into a vector (no hashing)
 static inline void sketch_read_into_vec(const char *restrict s, int len,
                                         u64vec *restrict vec,
                                         uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits,
@@ -1467,9 +1466,17 @@ static inline void sketch_read_into_vec(const char *restrict s, int len,
     }
 }
 
-// ---- Mode B (vector + radix + counts): in-file parallel when #files < threads ----
-static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_tab_t *tab,
-                                                     int BATCH_READS)
+// Choose bucket bits ~ 16× threads, clamped to [8,14]
+static inline unsigned choose_bucket_bits(int nth) {
+    unsigned target = (unsigned)(nth < 1 ? 1 : nth) * 16u;
+    unsigned bits = 0, x = 1;
+    while (x < target && bits < 14) { x <<= 1; ++bits; }
+    if (bits < 8) bits = 8;
+    return bits; // NB = 1<<bits
+}
+
+// ---- Mode B (vector + bucketed parallel finalizer) ----
+static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_tab_t *tab, int BATCH_READS)
 {
     const int nfiles = tab->infile_num;
 
@@ -1536,55 +1543,146 @@ static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_t
         }
         free(R);
 
-        // Optional shrink: per-thread sort+unique to reduce memory before concat
+        // Per-thread local shrink (optional but helpful)
         for (int t = 0; t < nth; ++t) {
             radix_sort_u64(V_thr[t].a, V_thr[t].n);
             V_thr[t].n = unique_inplace_u64(V_thr[t].a, V_thr[t].n);
         }
 
-        // Concatenate all thread vectors
-        size_t total = 0;
-        for (int t = 0; t < nth; ++t) total += V_thr[t].n;
+        // ---------------- Bucketed parallel finalizer ----------------
+        // 1) Choose bucket count and build per-thread bucket counts
+        const unsigned BITS = choose_bucket_bits(nth);
+        const size_t NB = (size_t)1u << BITS;
 
-        uint64_t *all = (uint64_t*)malloc(total * sizeof(uint64_t));
-        if (!all) err(errno, "%s(): OOM concat buffer", __func__);
-
-        size_t off = 0;
+        size_t *bucket_totals = (size_t*)calloc(NB, sizeof(size_t));
+        size_t **thr_counts = (size_t**)malloc((size_t)nth * sizeof(size_t*));
+        if (!bucket_totals || !thr_counts) err(errno, "%s(): OOM bucket metadata", __func__);
         for (int t = 0; t < nth; ++t) {
-            if (V_thr[t].n) {
-                memcpy(all + off, V_thr[t].a, V_thr[t].n * sizeof(uint64_t));
-                off += V_thr[t].n;
+            thr_counts[t] = (size_t*)calloc(NB, sizeof(size_t));
+            if (!thr_counts[t]) err(errno, "%s(): OOM thr_counts", __func__);
+        }
+
+        // count per thread per bucket
+        #pragma omp parallel for num_threads(opt->p) schedule(static)
+        for (int t = 0; t < nth; ++t) {
+            uint64_t *A = V_thr[t].a;
+            size_t n = V_thr[t].n;
+            for (size_t i = 0; i < n; ++i) {
+                unsigned b = (unsigned)(A[i] >> (64 - BITS));
+                ++thr_counts[t][b];
             }
-            v_free(&V_thr[t]);
         }
-        free(V_thr);
 
-        // Global sort once and RLE → SortedKV_Arrays_t (keys + counts)
-        radix_sort_u64(all, total);
-
-        int64_t *out_keys = (int64_t*)malloc(total * sizeof(int64_t)); // worst case length
-        int     *out_vals = (int*)    malloc(total * sizeof(int));
-        if (!out_keys || !out_vals) err(errno, "%s(): OOM kv arrays", __func__);
-
-        size_t w = 0;
-        for (size_t i = 0; i < total; ) {
-            uint64_t k = all[i];
-            size_t j = i + 1;
-            while (j < total && all[j] == k) ++j;
-            out_keys[w] = (int64_t)k;         // SortedKV_Arrays_t uses int64_t*
-            out_vals[w] = (int)(j - i);       // occurrences
-            ++w;
-            i = j;
+        // total per bucket and global bucket offsets
+        for (size_t b = 0; b < NB; ++b) {
+            size_t sum = 0;
+            for (int t = 0; t < nth; ++t) sum += thr_counts[t][b];
+            bucket_totals[b] = sum;
         }
-        free(all);
+        size_t *bucket_off = (size_t*)malloc((NB + 1) * sizeof(size_t));
+        if (!bucket_off) err(errno, "%s(): OOM bucket_off", __func__);
+        bucket_off[0] = 0;
+        for (size_t b = 0; b < NB; ++b) bucket_off[b+1] = bucket_off[b] + bucket_totals[b];
+        const size_t total = bucket_off[NB];
 
-        SortedKV_Arrays_t lco_ab = { .keys = out_keys, .values = out_vals, .len = w };
+        uint64_t *bucket_buf = (uint64_t*)malloc(total * sizeof(uint64_t));
+        if (!bucket_buf) err(errno, "%s(): OOM bucket_buf (total=%zu)", __func__, total);
 
-        // conflict filtering that needs counts
+        // per-thread starting write positions for each bucket
+        size_t **thr_write = (size_t**)malloc((size_t)nth * sizeof(size_t*));
+        if (!thr_write) err(errno, "%s(): OOM thr_write", __func__);
+        for (int t = 0; t < nth; ++t) {
+            thr_write[t] = (size_t*)malloc(NB * sizeof(size_t));
+            if (!thr_write[t]) err(errno, "%s(): OOM thr_write[t]", __func__);
+        }
+        // compute thr_write from bucket_off + prefix over threads
+        for (size_t b = 0; b < NB; ++b) {
+            size_t off = bucket_off[b];
+            for (int t = 0; t < nth; ++t) {
+                thr_write[t][b] = off;
+                off += thr_counts[t][b];
+            }
+        }
+
+        // 2) Scatter: threads write their keys into global bucket_buf at disjoint ranges
+        #pragma omp parallel for num_threads(opt->p) schedule(static)
+        for (int t = 0; t < nth; ++t) {
+            uint64_t *A = V_thr[t].a;
+            size_t n = V_thr[t].n;
+            size_t *pos = thr_write[t];
+            for (size_t i = 0; i < n; ++i) {
+                uint64_t k = A[i];
+                unsigned b = (unsigned)(k >> (64 - BITS));
+                bucket_buf[pos[b]++] = k;
+            }
+        }
+
+        // cleanup thread vectors and counts
+        for (int t = 0; t < nth; ++t) { v_free(&V_thr[t]); free(thr_counts[t]); free(thr_write[t]); }
+        free(V_thr); free(thr_counts); free(thr_write);
+
+        // 3) Per-bucket parallel sort + RLE (counts)
+        int64_t **bk_keys = (int64_t**)malloc(NB * sizeof(int64_t*));
+        int     **bk_vals = (int**)    malloc(NB * sizeof(int*));
+        size_t   *bk_len  = (size_t*)  malloc(NB * sizeof(size_t));
+        if (!bk_keys || !bk_vals || !bk_len) err(errno, "%s(): OOM bucket outputs", __func__);
+
+        #pragma omp parallel for num_threads(opt->p) schedule(dynamic)
+        for (size_t b = 0; b < NB; ++b) {
+            const size_t begin = bucket_off[b];
+            const size_t end   = bucket_off[b+1];
+            const size_t n     = end - begin;
+            if (!n) { bk_keys[b]=NULL; bk_vals[b]=NULL; bk_len[b]=0; continue; }
+
+            uint64_t *seg = bucket_buf + begin;
+            radix_sort_u64(seg, n);
+
+            int64_t *keys_b = (int64_t*)malloc(n * sizeof(int64_t));
+            int     *vals_b = (int*)    malloc(n * sizeof(int));
+            if (!keys_b || !vals_b) err(errno, "%s(): OOM bucket kv", __func__);
+
+            size_t w = 0;
+            for (size_t i = 0; i < n; ) {
+                uint64_t k = seg[i];
+                size_t j = i + 1;
+                while (j < n && seg[j] == k) ++j;
+                keys_b[w] = (int64_t)k;
+                vals_b[w] = (int)(j - i);
+                ++w;
+                i = j;
+            }
+            bk_keys[b] = keys_b;
+            bk_vals[b] = vals_b;
+            bk_len[b]  = w;
+        }
+
+        free(bucket_buf);
+
+        // 4) Stitch buckets back together (already globally ordered by bucket index)
+        size_t *out_off = (size_t*)malloc((NB + 1) * sizeof(size_t));
+        if (!out_off) err(errno, "%s(): OOM out_off", __func__);
+        out_off[0] = 0;
+        for (size_t b = 0; b < NB; ++b) out_off[b+1] = out_off[b] + bk_len[b];
+        const size_t M = out_off[NB];
+
+        int64_t *out_keys = (int64_t*)malloc(M * sizeof(int64_t));
+        int     *out_vals = (int*)    malloc(M * sizeof(int));
+        if (!out_keys || !out_vals) err(errno, "%s(): OOM final kv", __func__);
+
+        #pragma omp parallel for num_threads(opt->p) schedule(static)
+        for (size_t b = 0; b < NB; ++b) {
+            if (!bk_len[b]) continue;
+            memcpy(out_keys + out_off[b], bk_keys[b], bk_len[b] * sizeof(int64_t));
+            memcpy(out_vals + out_off[b], bk_vals[b], bk_len[b] * sizeof(int));
+            free(bk_keys[b]); free(bk_vals[b]);
+        }
+        free(bk_keys); free(bk_vals); free(bk_len); free(bucket_totals); free(bucket_off); free(out_off);
+
+        SortedKV_Arrays_t lco_ab = (SortedKV_Arrays_t){ .keys = out_keys, .values = out_vals, .len = M };
+
         if (!opt->conflict)
             remove_ctx_with_conflict_obj(&lco_ab, Bitslen.obj);
 
-        // write keys (same combined_sketch format), update index
         sketch_index[f+1] = lco_ab.len;
         if (lco_ab.len)
             fwrite(lco_ab.keys, sizeof(int64_t), lco_ab.len, comb);
@@ -1599,7 +1697,6 @@ static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_t
         fflush(stderr);
     }
 
-    // Build prefix-sum index and flush index file
     for (int i = 0; i < nfiles; ++i) sketch_index[i+1] += sketch_index[i];
     write_to_file(format_string("%s/%s", opt->outdir, idx_sketch_suffix),
                   sketch_index, (size_t)(nfiles + 1) * sizeof(sketch_index[0]));
@@ -1607,6 +1704,11 @@ static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_t
     free(sketch_index);
     write_sketch_stat(opt->outdir, tab);
 }
+
+
+
+
+
 
 void sketch_genomes_hybrid(sketch_opt_t *opt, infile_tab_t *tab, int batch_size)
 {
