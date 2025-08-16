@@ -24,7 +24,7 @@ size_t dedup_with_counts(uint64_t *arr, size_t n, uint32_t **counts) ;
 #include "../klib/khash.h"
 KHASH_MAP_INIT_INT64(sort64, uint32_t)
 typedef struct { uint64_t key;  uint32_t value;} kv_pair_t;
-typedef struct { int64_t *keys;int *values;size_t len;} SortedKV_Arrays_t ;
+typedef struct { uint64_t *keys; uint32_t *values; size_t len;} SortedKV_Arrays_t ;
 int cmp_kv_pair(const void *a, const void *b);
 SortedKV_Arrays_t sort_khash_u64 (khash_t(sort64) *h);
 SortedKV_Arrays_t gpt_sort_khash_u64(khash_t(sort64) *h);
@@ -50,15 +50,44 @@ static inline void radix_sort_u64(uint64_t *keys, size_t n){
     free(tmp);
 }
 
-static inline size_t unique_inplace_u64(uint64_t *a, size_t n)
+// ---- radix sort (keys+counts in lockstep) + in-place merge-equals (sum counts) ----
+static inline void radix_sort_kv_u64(uint64_t *k, uint32_t *v, size_t n)
 {
-    if (n == 0)
-        return 0;
-    size_t w = 1;
-    for (size_t i = 1; i < n; ++i)
-        if (a[i] != a[w - 1])
-            a[w++] = a[i];
-    return w;
+    if (n < 2)
+        return;
+    uint64_t *tk = (uint64_t *)malloc(n * sizeof(uint64_t));
+    uint32_t *tv = (uint32_t *)malloc(n * sizeof(uint32_t));
+    size_t cnt[256];
+    for (unsigned pass = 0; pass < 8; ++pass)
+    {
+        for (int i = 0; i < 256; ++i)
+            cnt[i] = 0;
+        unsigned sh = pass * 8;
+        for (size_t i = 0; i < n; ++i)
+            ++cnt[(k[i] >> sh) & 0xFFu];
+        size_t sum = 0;
+        for (int i = 0; i < 256; ++i)
+        {
+            size_t c = cnt[i];
+            cnt[i] = sum;
+            sum += c;
+        }
+        for (size_t i = 0; i < n; ++i)
+        {
+            unsigned b = (unsigned)((k[i] >> sh) & 0xFFu);
+            size_t p = cnt[b]++;
+            tk[p] = k[i];
+            tv[p] = v[i];
+        }
+        uint64_t *swk = k;
+        k = tk;
+        tk = swk;
+        uint32_t *swv = v;
+        v = tv;
+        tv = swv;
+    }
+    free(tk);
+    free(tv);
 }
 
 

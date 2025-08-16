@@ -1358,107 +1358,11 @@ static SortedKV_Arrays_t merge_shards_and_sort(khash_t(sort64) * *H_shard, int n
     return out;
 }
 
-// ---- Mode A: per-genome parallel (your improved fast path, one thread per file) ----
-static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, int batch_size)
-{
-    const int nfiles = tab->infile_num;
-
-    // combined output + index
-    FILE *comb = fopen(format_string("%s/%s", opt->outdir, combined_sketch_suffix), "wb");
-    if (!comb)
-        err(errno, "%s() open comb", __func__);
-    setvbuf(comb, NULL, _IOFBF, 8u << 20);
-
-    uint64_t *sketch_index = (uint64_t *)calloc((size_t)nfiles + 1, sizeof(uint64_t));
-    if (!sketch_index)
-        err(errno, "%s(): OOM index", __func__);
-
-    // Process in batches of files to cap memory if needed
-    for (int batch_start = 0; batch_start < nfiles; batch_start += batch_size)
-    {
-        const int batch_end = (batch_start + batch_size <= nfiles) ? (batch_start + batch_size) : nfiles;
-        const int this_batch = batch_end - batch_start;
-
-        uint64_t *lens = (uint64_t *)calloc((size_t)this_batch, sizeof(uint64_t));
-        if (!lens)
-            err(errno, "%s(): OOM lens", __func__);
-
-        uint64_t **batch_sketches = (uint64_t **)calloc((size_t)this_batch, sizeof(uint64_t *));
-        if (!batch_sketches)
-            err(errno, "%s(): OOM batch_sketches", __func__);
-
-#pragma omp parallel for num_threads(opt->p) schedule(dynamic, 1)
-        for (int bi = 0; bi < this_batch; ++bi)
-        {
-            const int file_idx = batch_start + bi;
-            const char *fpath = tab->organized_infile_tab[file_idx].fpath;
-
-            gzFile infile = gzopen(fpath, "r");
-            if (!infile)
-                err(errno, "%s(): Cannot open %s", __func__, fpath);
-            (void)gzbuffer(infile, 4u << 20);
-
-            kseq_t *seq = kseq_init(infile);
-            if (!seq)
-                err(errno, "%s(): kseq_init %s", __func__, fpath);
-
-            khash_t(sort64) *h = kh_init(sort64);
-            if (!h)
-                err(errno, "%s(): kh_init OOM", __func__);
-            kh_resize(sort64, h, 1u << 15); // heuristic
-
-            while (kseq_read(seq) >= 0)
-                sketch_read_into_map(seq->seq.s, (int)seq->seq.l, h, ctxmask, tupmask, Bitslen.obj, klen);
-
-            SortedKV_Arrays_t lco_ab = gpt_sort_khash_u64(h);
-            if (!opt->conflict)
-                remove_ctx_with_conflict_obj(&lco_ab, Bitslen.obj);
-
-            batch_sketches[bi] = lco_ab.keys;
-            lens[bi] = lco_ab.len;
-
-            kh_destroy(sort64, h);
-            free(lco_ab.values);
-            kseq_destroy(seq);
-            gzclose(infile);
-        }
-
-        // write batch in order
-        for (int bi = 0; bi < this_batch; ++bi)
-        {
-            const int gi = batch_start + bi;
-            sketch_index[gi + 1] = lens[bi];
-            if (lens[bi])
-            {
-                fwrite(batch_sketches[bi], sizeof(uint64_t), lens[bi], comb);
-                free(batch_sketches[bi]);
-            }
-        }
-        free(batch_sketches);
-        free(lens);
-
-        fprintf(stderr, "\r%d/%d genomes processed", batch_end, nfiles);
-        fflush(stderr);
-    }
-
-    // prefix sum index and flush
-    for (int i = 0; i < nfiles; ++i)
-        sketch_index[i + 1] += sketch_index[i];
-    write_to_file(format_string("%s/%s", opt->outdir, idx_sketch_suffix),
-                  sketch_index, (size_t)(nfiles + 1) * sizeof(sketch_index[0]));
-    fclose(comb);
-    free(sketch_index);
-    write_sketch_stat(opt->outdir, tab);
-}
-
-// ---------- helpers used by Mode-B (vector + radix + RLE) ----------
-
 // Hot loop: push kept ctxobj into a vector (no hashing)
 static inline void sketch_read_into_vec(const char *restrict s, int len, u64vec *restrict vec,
                                         uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits, uint32_t klen)
 {
-    if (len < (int)klen)
-        return;
+    if (len < (int)klen) return;
     const uint32_t len_mv = (uint32_t)(2 * klen - 2);
 
     uint64_t tuple = 0, crv = 0;
@@ -1495,392 +1399,6 @@ static inline void sketch_read_into_vec(const char *restrict s, int len, u64vec 
     }
 }
 
-// Choose bucket bits ~ 16× threads, clamped to [8,14]
-static inline unsigned choose_bucket_bits(int nth)
-{
-    unsigned target = (unsigned)(nth < 1 ? 1 : nth) * 16u;
-    unsigned bits = 0, x = 1;
-    while (x < target && bits < 14)
-    {
-        x <<= 1;
-        ++bits;
-    }
-    if (bits < 8)
-        bits = 8;
-    return bits; // NB = 1<<bits
-}
-
-// ---- Mode B (vector + bucketed parallel finalizer) ----
-static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_tab_t *tab, int BATCH_READS)
-{
-    const int nfiles = tab->infile_num;
-
-    FILE *comb = fopen(format_string("%s/%s", opt->outdir, combined_sketch_suffix), "wb");
-    if (!comb)
-        err(errno, "%s() open file error: %s/%s", __func__, opt->outdir, combined_sketch_suffix);
-    setvbuf(comb, NULL, _IOFBF, 8u << 20);
-
-    uint64_t *sketch_index = (uint64_t *)calloc((size_t)nfiles + 1, sizeof(uint64_t));
-    if (!sketch_index)
-        err(errno, "%s(): OOM sketch_index", __func__);
-
-    for (int f = 0; f < nfiles; ++f)
-    {
-        const char *path = tab->organized_infile_tab[f].fpath;
-        gzFile in = gzopen(path, "r");
-        if (!in)
-            err(errno, "%s(): Cannot open %s", __func__, path);
-        (void)gzbuffer(in, 4u << 20);
-        kseq_t *seq = kseq_init(in);
-
-        typedef struct
-        {
-            char *s;
-            int l;
-        } read_span_t;
-        read_span_t *R = (read_span_t *)malloc((size_t)BATCH_READS * sizeof(*R));
-        if (!R)
-            err(errno, "%s(): OOM batch reads", __func__);
-        int rcnt = 0;
-        // per-file per-thread vectors
-        const int nth = opt->p;
-        u64vec *V_thr = (u64vec *)malloc((size_t)nth * sizeof(u64vec));
-        if (!V_thr)
-            err(errno, "%s(): OOM V_thr", __func__);
-        for (int t = 0; t < nth; ++t)
-            v_init(&V_thr[t], 1u << 15); // heuristic
-        // Read batches, process in parallel into per-thread vectors
-        int ret;
-        do
-        {
-            ret = kseq_read(seq);
-
-            if (ret >= 0)
-            {
-                char *buf = (char *)malloc(seq->seq.l + 1);
-                if (!buf)
-                    err(errno, "%s(): OOM read buf", __func__);
-                memcpy(buf, seq->seq.s, seq->seq.l);
-                buf[seq->seq.l] = '\0';
-                R[rcnt].s = buf;
-                R[rcnt].l = (int)seq->seq.l;
-                ++rcnt;
-            }
-
-            if (rcnt >= BATCH_READS || ret < 0)
-            {
-#pragma omp parallel for if (opt->p > 1) num_threads(opt->p) schedule(static)
-                for (int ri = 0; ri < rcnt; ++ri)
-                {
-                    int tid = 0;
-#ifdef _OPENMP
-                    tid = omp_get_thread_num();
-#endif
-                    sketch_read_into_vec(R[ri].s, R[ri].l, &V_thr[tid], ctxmask, tupmask, Bitslen.obj, klen);
-                }
-                for (int i = 0; i < rcnt; ++i)
-                    free(R[i].s);
-                rcnt = 0;
-            }
-        } while (ret >= 0);
-
-        // Per-thread local shrink (optional but helpful)
-        for (int t = 0; t < nth; ++t)
-        {
-            radix_sort_u64(V_thr[t].a, V_thr[t].n);
-            V_thr[t].n = unique_inplace_u64(V_thr[t].a, V_thr[t].n);
-        }
-        // ---- Per-thread local shrink (parallel) ----
-        size_t total_elems = 0;
-        for (int t = 0; t < nth; ++t)
-            total_elems += V_thr[t].n;
-
-        // Only bother parallelizing if there's real work
-        if (nth > 1 && total_elems >= (1u << 20))
-        { // ~1M keys threshold; tune as you like
-#pragma omp parallel for num_threads(opt->p) schedule(dynamic)
-            for (int t = 0; t < nth; ++t)
-            {
-                if (V_thr[t].n < 2)
-                    continue;
-                radix_sort_u64(V_thr[t].a, V_thr[t].n);
-                V_thr[t].n = unique_inplace_u64(V_thr[t].a, V_thr[t].n);
-            }
-        }
-        else
-        {
-            // serial fallback (avoids omp overhead on small inputs)
-            for (int t = 0; t < nth; ++t)
-            {
-                if (V_thr[t].n < 2)
-                    continue;
-                radix_sort_u64(V_thr[t].a, V_thr[t].n);
-                V_thr[t].n = unique_inplace_u64(V_thr[t].a, V_thr[t].n);
-            }
-        }
-
-        // ---------------- Bucketed parallel finalizer ----------------
-        // 1) Choose bucket count and build per-thread bucket counts
-        const unsigned BITS = choose_bucket_bits(nth);
-        const size_t NB = (size_t)1u << BITS;
-
-        size_t *bucket_totals = (size_t *)calloc(NB, sizeof(size_t));
-        size_t **thr_counts = (size_t **)malloc((size_t)nth * sizeof(size_t *));
-        if (!bucket_totals || !thr_counts)
-            err(errno, "%s(): OOM bucket metadata", __func__);
-        for (int t = 0; t < nth; ++t)
-        {
-            thr_counts[t] = (size_t *)calloc(NB, sizeof(size_t));
-            if (!thr_counts[t])
-                err(errno, "%s(): OOM thr_counts", __func__);
-        }
-
-// count per thread per bucket
-#pragma omp parallel for num_threads(opt->p) schedule(static)
-        for (int t = 0; t < nth; ++t)
-        {
-            uint64_t *A = V_thr[t].a;
-            size_t n = V_thr[t].n;
-            for (size_t i = 0; i < n; ++i)
-            {
-                unsigned b = (unsigned)(A[i] >> (64 - BITS));
-                ++thr_counts[t][b];
-            }
-        }
-
-        // total per bucket and global bucket offsets
-        for (size_t b = 0; b < NB; ++b)
-        {
-            size_t sum = 0;
-            for (int t = 0; t < nth; ++t)
-                sum += thr_counts[t][b];
-            bucket_totals[b] = sum;
-        }
-        size_t *bucket_off = (size_t *)malloc((NB + 1) * sizeof(size_t));
-        if (!bucket_off)
-            err(errno, "%s(): OOM bucket_off", __func__);
-        bucket_off[0] = 0;
-        for (size_t b = 0; b < NB; ++b)
-            bucket_off[b + 1] = bucket_off[b] + bucket_totals[b];
-        const size_t total = bucket_off[NB];
-
-        uint64_t *bucket_buf = (uint64_t *)malloc(total * sizeof(uint64_t));
-        if (!bucket_buf)
-            err(errno, "%s(): OOM bucket_buf (total=%zu)", __func__, total);
-
-        // per-thread starting write positions for each bucket
-        size_t **thr_write = (size_t **)malloc((size_t)nth * sizeof(size_t *));
-        if (!thr_write)
-            err(errno, "%s(): OOM thr_write", __func__);
-        for (int t = 0; t < nth; ++t)
-        {
-            thr_write[t] = (size_t *)malloc(NB * sizeof(size_t));
-            if (!thr_write[t])
-                err(errno, "%s(): OOM thr_write[t]", __func__);
-        }
-        // compute thr_write from bucket_off + prefix over threads
-        for (size_t b = 0; b < NB; ++b)
-        {
-            size_t off = bucket_off[b];
-            for (int t = 0; t < nth; ++t)
-            {
-                thr_write[t][b] = off;
-                off += thr_counts[t][b];
-            }
-        }
-
-// 2) Scatter: threads write their keys into global bucket_buf at disjoint ranges
-#pragma omp parallel for num_threads(opt->p) schedule(static)
-        for (int t = 0; t < nth; ++t)
-        {
-            uint64_t *A = V_thr[t].a;
-            size_t n = V_thr[t].n;
-            size_t *pos = thr_write[t];
-            for (size_t i = 0; i < n; ++i)
-            {
-                uint64_t k = A[i];
-                unsigned b = (unsigned)(k >> (64 - BITS));
-                bucket_buf[pos[b]++] = k;
-            }
-        }
-
-        // cleanup thread vectors and counts
-        for (int t = 0; t < nth; ++t)
-        {
-            v_free(&V_thr[t]);
-            free(thr_counts[t]);
-            free(thr_write[t]);
-        }
-        free(V_thr);
-        free(thr_counts);
-        free(thr_write);
-
-        // 3) Per-bucket parallel sort + RLE (counts)
-        int64_t **bk_keys = (int64_t **)malloc(NB * sizeof(int64_t *));
-        int **bk_vals = (int **)malloc(NB * sizeof(int *));
-        size_t *bk_len = (size_t *)malloc(NB * sizeof(size_t));
-        if (!bk_keys || !bk_vals || !bk_len)
-            err(errno, "%s(): OOM bucket outputs", __func__);
-
-#pragma omp parallel for num_threads(opt->p) schedule(dynamic)
-        for (size_t b = 0; b < NB; ++b)
-        {
-            const size_t begin = bucket_off[b];
-            const size_t end = bucket_off[b + 1];
-            const size_t n = end - begin;
-            if (!n)
-            {
-                bk_keys[b] = NULL;
-                bk_vals[b] = NULL;
-                bk_len[b] = 0;
-                continue;
-            }
-
-            uint64_t *seg = bucket_buf + begin;
-            radix_sort_u64(seg, n);
-
-            int64_t *keys_b = (int64_t *)malloc(n * sizeof(int64_t));
-            int *vals_b = (int *)malloc(n * sizeof(int));
-            if (!keys_b || !vals_b)
-                err(errno, "%s(): OOM bucket kv", __func__);
-
-            size_t w = 0;
-            for (size_t i = 0; i < n;)
-            {
-                uint64_t k = seg[i];
-                size_t j = i + 1;
-                while (j < n && seg[j] == k)
-                    ++j;
-                keys_b[w] = (int64_t)k;
-                vals_b[w] = (int)(j - i);
-                ++w;
-                i = j;
-            }
-            bk_keys[b] = keys_b;
-            bk_vals[b] = vals_b;
-            bk_len[b] = w;
-        }
-
-        free(bucket_buf);
-
-        // 4) Stitch buckets back together (already globally ordered by bucket index)
-        size_t *out_off = (size_t *)malloc((NB + 1) * sizeof(size_t));
-        if (!out_off)
-            err(errno, "%s(): OOM out_off", __func__);
-        out_off[0] = 0;
-        for (size_t b = 0; b < NB; ++b)
-            out_off[b + 1] = out_off[b] + bk_len[b];
-        const size_t M = out_off[NB];
-
-        int64_t *out_keys = (int64_t *)malloc(M * sizeof(int64_t));
-        int *out_vals = (int *)malloc(M * sizeof(int));
-        if (!out_keys || !out_vals)
-            err(errno, "%s(): OOM final kv", __func__);
-
-#pragma omp parallel for num_threads(opt->p) schedule(static)
-        for (size_t b = 0; b < NB; ++b)
-        {
-            if (!bk_len[b])
-                continue;
-            memcpy(out_keys + out_off[b], bk_keys[b], bk_len[b] * sizeof(int64_t));
-            memcpy(out_vals + out_off[b], bk_vals[b], bk_len[b] * sizeof(int));
-            free(bk_keys[b]);
-            free(bk_vals[b]);
-        }
-        free(bk_keys);
-        free(bk_vals);
-        free(bk_len);
-        free(bucket_totals);
-        free(bucket_off);
-        free(out_off);
-
-        SortedKV_Arrays_t lco_ab = (SortedKV_Arrays_t){.keys = out_keys, .values = out_vals, .len = M};
-
-        if (!opt->conflict)
-            remove_ctx_with_conflict_obj(&lco_ab, Bitslen.obj);
-
-        sketch_index[f + 1] = lco_ab.len;
-        if (lco_ab.len)
-            fwrite(lco_ab.keys, sizeof(int64_t), lco_ab.len, comb);
-
-        free(lco_ab.keys);
-        free(lco_ab.values);
-
-        kseq_destroy(seq);
-        gzclose(in);
-
-        fprintf(stderr, "\r%d/%d genomes processed", f + 1, nfiles);
-        fflush(stderr);
-    }
-
-    for (int i = 0; i < nfiles; ++i)
-        sketch_index[i + 1] += sketch_index[i];
-    write_to_file(format_string("%s/%s", opt->outdir, idx_sketch_suffix),
-                  sketch_index, (size_t)(nfiles + 1) * sizeof(sketch_index[0]));
-    fclose(comb);
-    free(sketch_index);
-    write_sketch_stat(opt->outdir, tab);
-}
-
-//<-test code
-
-// ---- radix sort (keys+counts in lockstep) + in-place merge-equals (sum counts) ----
-static inline void radix_sort_kv_u64(uint64_t *k, uint32_t *v, size_t n)
-{
-    if (n < 2)
-        return;
-    uint64_t *tk = (uint64_t *)malloc(n * sizeof(uint64_t));
-    uint32_t *tv = (uint32_t *)malloc(n * sizeof(uint32_t));
-    size_t cnt[256];
-    for (unsigned pass = 0; pass < 8; ++pass)
-    {
-        for (int i = 0; i < 256; ++i)
-            cnt[i] = 0;
-        unsigned sh = pass * 8;
-        for (size_t i = 0; i < n; ++i)
-            ++cnt[(k[i] >> sh) & 0xFFu];
-        size_t sum = 0;
-        for (int i = 0; i < 256; ++i)
-        {
-            size_t c = cnt[i];
-            cnt[i] = sum;
-            sum += c;
-        }
-        for (size_t i = 0; i < n; ++i)
-        {
-            unsigned b = (unsigned)((k[i] >> sh) & 0xFFu);
-            size_t p = cnt[b]++;
-            tk[p] = k[i];
-            tv[p] = v[i];
-        }
-        uint64_t *swk = k;
-        k = tk;
-        tk = swk;
-        uint32_t *swv = v;
-        v = tv;
-        tv = swv;
-    }
-    free(tk);
-    free(tv);
-}
-static inline size_t shrink_kv_inplace_u64_u32(uint64_t *k, uint32_t *v, size_t n)
-{
-    if (!n)
-        return 0;
-    size_t w = 0;
-    for (size_t r = 1; r < n; ++r)
-    {
-        if (k[r] == k[w])
-            v[w] += v[r];
-        else
-        {
-            ++w;
-            k[w] = k[r];
-            v[w] = v[r];
-        }
-    }
-    return w + 1;
-}
 static inline void shrink_thread_vec(u64vec *vec, uint32_t **counts_out)
 {
     // vec->a contains keys; produce counts_out aligned to deduped keys
@@ -1908,8 +1426,146 @@ static inline void shrink_thread_vec(u64vec *vec, uint32_t **counts_out)
     }
 }
 
+// ---- Mode A: per-genome parallel (vector + radix + counts), one thread per file ----
+static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, int batch_size)
+{
+    const int nfiles = tab->infile_num;
+
+    FILE *comb = fopen(format_string("%s/%s", opt->outdir, combined_sketch_suffix), "wb");
+    if (!comb) err(errno, "%s() open comb", __func__);
+    setvbuf(comb, NULL, _IOFBF, 8u<<20);
+
+    uint64_t *sketch_index = (uint64_t *)calloc((size_t)nfiles + 1, sizeof(uint64_t));
+    if (!sketch_index) err(errno, "%s(): OOM index", __func__);
+
+    // Process in batches of files to cap memory if needed
+    for (int batch_start = 0; batch_start < nfiles; batch_start += batch_size) {
+        const int batch_end  = (batch_start + batch_size <= nfiles) ? (batch_start + batch_size) : nfiles;
+        const int this_batch = batch_end - batch_start;
+
+        uint64_t *lens = (uint64_t *)calloc((size_t)this_batch, sizeof(uint64_t));
+        if (!lens) err(errno, "%s(): OOM lens", __func__);
+
+        // we’ll keep per-file keys arrays to write after processing
+        uint64_t **batch_keys = (uint64_t**)calloc((size_t)this_batch, sizeof(uint64_t*));
+        if (!batch_keys) err(errno, "%s(): OOM batch_keys", __func__);
+
+        #pragma omp parallel for num_threads(opt->p) schedule(dynamic,1)
+        for (int bi = 0; bi < this_batch; ++bi) {
+            const int file_idx = batch_start + bi;
+            const char *fpath  = tab->organized_infile_tab[file_idx].fpath;
+
+            gzFile infile = gzopen(fpath, "r");
+            if (!infile) err(errno, "%s(): Cannot open %s", __func__, fpath);
+            (void)gzbuffer(infile, 4u<<20);
+
+            kseq_t *seq = kseq_init(infile);
+            if (!seq) err(errno, "%s(): kseq_init %s", __func__, fpath);
+
+            // 1) collect kept ctxobj into a single vector for this file/thread
+            u64vec vec; v_init(&vec, 1u<<15);  // heuristic initial capacity
+            while (kseq_read(seq) >= 0) {
+                sketch_read_into_vec(seq->seq.s, (int)seq->seq.l,
+                                     &vec, ctxmask, tupmask, Bitslen.obj, klen);
+            }
+
+            // 2) sort + dedup with counts (keys-only vector -> counts array)
+            uint32_t *counts = NULL;
+            shrink_thread_vec(&vec, &counts);
+            // 3) build SortedKV_Arrays_t (int64_t/int) and apply conflict filter
+            SortedKV_Arrays_t lco_ab;
+            lco_ab.len = vec.n;
+            if (vec.n) {
+                // copy keys into int64_t array
+                uint64_t *outk = (uint64_t*) malloc(vec.n * sizeof(uint64_t));
+                uint32_t *outv = (uint32_t*) malloc(vec.n * sizeof(uint32_t));
+                if (!outk || !outv) err(errno, "%s(): OOM file kv", __func__);
+
+                memcpy(outk, vec.a, vec.n * sizeof(uint64_t));
+                if (counts) memcpy(outv, counts, vec.n * sizeof(uint32_t));
+                else memset(outv, 0, vec.n * sizeof(uint32_t));
+
+                lco_ab.keys   = outk;
+                lco_ab.values = outv;
+                
+                if (!opt->conflict)
+                    remove_ctx_with_conflict_obj(&lco_ab, Bitslen.obj);
+
+                // stash for writing
+                batch_keys[bi] = lco_ab.keys;
+                lens[bi]       = lco_ab.len;
+
+                free(lco_ab.values); // you only persist keys on disk
+            } else batch_keys[bi] = NULL; lens[bi] = 0;
+            
+
+            free(counts);
+            v_free(&vec);
+            kseq_destroy(seq);
+            gzclose(infile);
+        } // end per-file loop
+
+        // write batch in order
+        for (int bi = 0; bi < this_batch; ++bi) {
+            const int gi = batch_start + bi;
+            sketch_index[gi + 1] = lens[bi];
+            if (lens[bi]) {
+                fwrite(batch_keys[bi], sizeof(int64_t), lens[bi], comb);
+                free(batch_keys[bi]);
+            }
+        }
+        free(batch_keys);
+        free(lens);
+
+        fprintf(stderr, "\r%d/%d genomes processed", batch_end, nfiles);
+        fflush(stderr);
+    }
+
+    for (int i = 0; i < nfiles; ++i) sketch_index[i + 1] += sketch_index[i];
+    write_to_file(format_string("%s/%s", opt->outdir, idx_sketch_suffix),
+                  sketch_index, (size_t)(nfiles + 1) * sizeof(sketch_index[0]));
+    fclose(comb);
+    free(sketch_index);
+    write_sketch_stat(opt->outdir, tab);
+}
+
+
+// ---------- helpers used by Mode-B (vector + radix + RLE) ----------
+
+// Choose bucket bits ~ 16× threads, clamped to [8,14]
+static inline unsigned choose_bucket_bits(int nth)
+{
+    unsigned target = (unsigned)(nth < 1 ? 1 : nth) * 16u;
+    unsigned bits = 0, x = 1;
+    while (x < target && bits < 14)
+    {
+        x <<= 1;
+        ++bits;
+    }
+    if (bits < 8)
+        bits = 8;
+    return bits; // NB = 1<<bits
+}
+
+static inline size_t shrink_kv_inplace_u64_u32(uint64_t *k, uint32_t *v, size_t n)
+{
+    if (!n) return 0;
+    size_t w = 0;
+    for (size_t r = 1; r < n; ++r)
+    {
+        if (k[r] == k[w]) v[w] += v[r];
+        else {
+            ++w;
+            k[w] = k[r];
+            v[w] = v[r];
+        }
+    }
+    return w + 1;
+}
+
+
 // ---------------- Mode B: vector + bucketed parallel finalizer (with counts) ----------------
-static void test_sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_tab_t *tab, int BATCH_READS)
+static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_tab_t *tab, int BATCH_READS)
 {
     const int nfiles = tab->infile_num;
 
@@ -2181,6 +1837,6 @@ void sketch_genomes_hybrid(sketch_opt_t *opt, infile_tab_t *tab, int batch_size)
     else
     {
         // Mode-B: in-file parallel
-        test_sketch_few_files_with_intrafile_parallel(opt, tab, 65536);
+        sketch_few_files_with_intrafile_parallel(opt, tab, 65536);
     }
 }
