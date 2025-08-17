@@ -30,6 +30,8 @@ SortedKV_Arrays_t sort_khash_u64 (khash_t(sort64) *h);
 SortedKV_Arrays_t gpt_sort_khash_u64(khash_t(sort64) *h);
 void filter_n_SortedKV_Arrays(SortedKV_Arrays_t *result, uint32_t n);
 void remove_ctx_with_conflict_obj (SortedKV_Arrays_t *data, uint32_t n_obj_bits);
+void remove_ctx_with_conflict_obj_noabund (uint64_t *keys, size_t *len, uint32_t n_obj_bits) ;
+
 //void free_SortedKV_Arrays (SortedKV_Arrays_t *result);
 
 

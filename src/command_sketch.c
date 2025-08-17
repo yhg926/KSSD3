@@ -54,7 +54,7 @@ void compute_sketch(sketch_opt_t *sketch_opt_val, infile_tab_t *infile_stat)
     }
     // test_read_genomes2mem2sortedctxobj64(sketch_opt_val, infile_stat, 1000);
     // read_genomes2mem2sortedctxobj64(sketch_opt_val, infile_stat, 1000);
-    sketch_genomes_hybrid(sketch_opt_val, infile_stat, 1000);
+    sketch_genomes_hybrid(sketch_opt_val, infile_stat, 1024);
     return;
     // 20150724: i am not sure if below code is still needed, since we have read_genomes2mem2sortedctxobj64() to handle all cases
     // normal sketching mode
@@ -1407,11 +1407,9 @@ static inline void shrink_thread_vec(u64vec *vec, uint32_t **counts_out)
         *counts_out = NULL;
         return;
     }
-    if (vec->n == 1)
-    { // fast path
+    if (vec->n == 1){ // fast path
         *counts_out = (uint32_t *)malloc(sizeof(uint32_t));
-        if (*counts_out)
-            (*counts_out)[0] = 1;
+        if (*counts_out) (*counts_out)[0] = 1;
         // vec->a already “sorted/unique” of length 1
         return;
     }
@@ -1430,10 +1428,14 @@ static inline void shrink_thread_vec(u64vec *vec, uint32_t **counts_out)
 static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, int batch_size)
 {
     const int nfiles = tab->infile_num;
-
+    bool has_abundance = opt->abundance;
     FILE *comb = fopen(format_string("%s/%s", opt->outdir, combined_sketch_suffix), "wb");
     if (!comb) err(errno, "%s() open comb", __func__);
     setvbuf(comb, NULL, _IOFBF, 8u<<20);
+    FILE *comb_ab; if(has_abundance) {
+        comb_ab = fopen(format_string("%s/%s", opt->outdir, combined_ab_suffix), "wb");
+        setvbuf(comb_ab, NULL, _IOFBF, 8u<<20);
+    }
 
     uint64_t *sketch_index = (uint64_t *)calloc((size_t)nfiles + 1, sizeof(uint64_t));
     if (!sketch_index) err(errno, "%s(): OOM index", __func__);
@@ -1449,6 +1451,10 @@ static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, 
         // we’ll keep per-file keys arrays to write after processing
         uint64_t **batch_keys = (uint64_t**)calloc((size_t)this_batch, sizeof(uint64_t*));
         if (!batch_keys) err(errno, "%s(): OOM batch_keys", __func__);
+        uint32_t **batch_vals; if(has_abundance) {
+            batch_vals = (uint32_t**)calloc((size_t)this_batch, sizeof(uint32_t*));
+            if (!batch_vals) err(errno, "%s(): OOM batch_vals", __func__);
+        }
 
         #pragma omp parallel for num_threads(opt->p) schedule(dynamic,1)
         for (int bi = 0; bi < this_batch; ++bi) {
@@ -1469,37 +1475,33 @@ static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, 
                                      &vec, ctxmask, tupmask, Bitslen.obj, klen);
             }
 
-            // 2) sort + dedup with counts (keys-only vector -> counts array)
-            uint32_t *counts = NULL;
-            shrink_thread_vec(&vec, &counts);
-            // 3) build SortedKV_Arrays_t (int64_t/int) and apply conflict filter
-            SortedKV_Arrays_t lco_ab;
-            lco_ab.len = vec.n;
             if (vec.n) {
-                // copy keys into int64_t array
-                uint64_t *outk = (uint64_t*) malloc(vec.n * sizeof(uint64_t));
-                uint32_t *outv = (uint32_t*) malloc(vec.n * sizeof(uint32_t));
-                if (!outk || !outv) err(errno, "%s(): OOM file kv", __func__);
-
-                memcpy(outk, vec.a, vec.n * sizeof(uint64_t));
-                if (counts) memcpy(outv, counts, vec.n * sizeof(uint32_t));
-                else memset(outv, 0, vec.n * sizeof(uint32_t));
-
-                lco_ab.keys   = outk;
-                lco_ab.values = outv;
-                
-                if (!opt->conflict)
-                    remove_ctx_with_conflict_obj(&lco_ab, Bitslen.obj);
-
-                // stash for writing
-                batch_keys[bi] = lco_ab.keys;
-                lens[bi]       = lco_ab.len;
-
-                free(lco_ab.values); // you only persist keys on disk
-            } else batch_keys[bi] = NULL; lens[bi] = 0;
+                // 2) sort + dedup with counts (keys-only vector -> counts array)
+                radix_sort_u64(vec.a, vec.n);
+                if(has_abundance) {
+                    uint32_t *outv = NULL;
+                    vec.n = dedup_with_counts(vec.a, vec.n, &outv);
+                    uint64_t *outk = (uint64_t*) malloc(vec.n * sizeof(uint64_t));
+                    if (!outk || !outv) err(errno, "%s(): OOM file kv", __func__);
+                    memcpy(outk, vec.a, vec.n * sizeof(uint64_t));
+                    SortedKV_Arrays_t lco_ab = (SortedKV_Arrays_t){.keys = outk, .values = outv, .len = vec.n};
+                    if (!opt->conflict) remove_ctx_with_conflict_obj(&lco_ab, Bitslen.obj);
+                    batch_keys[bi] = lco_ab.keys;
+                    batch_vals[bi] = lco_ab.values;
+                    lens[bi]       = lco_ab.len;
+                }
+                else{              
+                    vec.n = dedup_sorted_uint64(vec.a, vec.n);
+                    uint64_t *outk = (uint64_t*) malloc(vec.n * sizeof(uint64_t));
+                    if (!outk) err(errno, "%s(): OOM file kv", __func__);
+                    memcpy(outk, vec.a, vec.n * sizeof(uint64_t));
+                    if (!opt->conflict) remove_ctx_with_conflict_obj_noabund(outk,&(vec.n), Bitslen.obj);
+                    batch_keys[bi] = outk;
+                    lens[bi] = vec.n;
+                }
+            } else 
+                lens[bi] = 0;
             
-
-            free(counts);
             v_free(&vec);
             kseq_destroy(seq);
             gzclose(infile);
@@ -1510,13 +1512,16 @@ static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, 
             const int gi = batch_start + bi;
             sketch_index[gi + 1] = lens[bi];
             if (lens[bi]) {
-                fwrite(batch_keys[bi], sizeof(int64_t), lens[bi], comb);
+                fwrite(batch_keys[bi], sizeof(uint64_t), lens[bi], comb);
                 free(batch_keys[bi]);
+                 if(has_abundance) {
+                    fwrite(batch_vals[bi], sizeof(uint32_t), lens[bi], comb_ab);
+                    free(batch_vals[bi]);
+                 }
             }
         }
-        free(batch_keys);
-        free(lens);
-
+        free_all(batch_keys,lens,NULL);
+        if(!batch_vals) free(batch_vals);
         fprintf(stderr, "\r%d/%d genomes processed", batch_end, nfiles);
         fflush(stderr);
     }
@@ -1525,6 +1530,7 @@ static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, 
     write_to_file(format_string("%s/%s", opt->outdir, idx_sketch_suffix),
                   sketch_index, (size_t)(nfiles + 1) * sizeof(sketch_index[0]));
     fclose(comb);
+    if(has_abundance) fclose(comb_ab);
     free(sketch_index);
     write_sketch_stat(opt->outdir, tab);
 }
