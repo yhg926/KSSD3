@@ -1193,9 +1193,23 @@ static inline size_t shrink_kv_inplace_u64_u32(uint64_t *k, uint32_t *v, size_t 
 }
 
 // --- helpers needed by Mode-B ---
+// Put these includes near your other system headers (once per file)
+
+// C helper for finding '\n' between [off, lim)
+static inline char *find_nl(const char *base, size_t off, size_t lim) {
+    if (off >= lim) return NULL;
+    return (char*)memchr(base + off, '\n', lim - off);
+}
 
 // Plain FASTQ fast path: mmap + in-file parallel + bucketed finalizer
-// This runs the WHOLE pipeline and writes outputs (comb/comb_ab), updating *sketch_index_slot.
+// Writes outputs to comb/comb_ab and updates *sketch_index_slot.
+// Requires your existing utilities/types:
+//  - u64vec, v_init, v_free
+//  - shrink_thread_vec(u64vec*, uint32_t**)
+//  - clamp_bucket_bits_from_total(size_t)
+//  - radix_sort_kv_u64(...), shrink_kv_inplace_u64_u32(...)
+//  - apply_conflict_filter(...), write_index_payload_and_free(...)
+//  - globals/params: ctxmask, tupmask, Bitslen.obj, klen
 static void sketch_one_plain_fastq_mmap(sketch_opt_t *opt,
                                         const char *path,
                                         uint64_t *sketch_index_slot,
@@ -1225,21 +1239,19 @@ static void sketch_one_plain_fastq_mmap(sketch_opt_t *opt,
     madvise(base, fsz, MADV_WILLNEED);
 #endif
 
-    // Per-thread vectors + counts
-    const int nthr = nth;
-    u64vec    *V_thr = (u64vec*)malloc((size_t)nthr*sizeof(u64vec));
-    uint32_t **C_thr = (uint32_t**)calloc((size_t)nthr, sizeof(uint32_t*));
+    // Per-thread accumulators
+    u64vec    *V_thr = (u64vec*)malloc((size_t)nth*sizeof(u64vec));
+    uint32_t **C_thr = (uint32_t**)calloc((size_t)nth, sizeof(uint32_t*));
     if (!V_thr || !C_thr) err(errno, "%s(): OOM V_thr/C_thr", __func__);
-    for (int t=0; t<nthr; ++t) v_init(&V_thr[t], 1u<<15);
+    for (int t=0; t<nth; ++t) v_init(&V_thr[t], 1u<<15);
 
-    // Partition file by bytes
-    const size_t chunk = (fsz + (size_t)nthr - 1) / (size_t)nthr;
+    // Split into byte ranges; each thread owns records whose header '@' starts in its [start,end)
+    const size_t chunk = (fsz + (size_t)nth - 1) / (size_t)nth;
 
-    // Each thread scans its byte range, pushing only sequence lines (line 1 of each 4)
-    #pragma omp parallel for if (nthr>1) num_threads(opt->p) schedule(static)
-    for (int tid=0; tid<nthr; ++tid){
+    #pragma omp parallel for if (nth>1) num_threads(opt->p) schedule(static)
+    for (int tid=0; tid<nth; ++tid){
         size_t start = (size_t)tid * chunk;
-        size_t end   = (tid == nthr-1) ? fsz : start + chunk;
+        size_t end   = (tid == nth-1) ? fsz : start + chunk;
         if (start >= fsz) { V_thr[tid].n = 0; continue; }
 
         // Align to a line boundary
@@ -1247,67 +1259,69 @@ static void sketch_one_plain_fastq_mmap(sketch_opt_t *opt,
             while (start < end && base[start-1] != '\n') ++start;
         }
 
-        // Find record boundary (line_mod == 0 at record start)
-        // We assume we're now at a line start; consume lines until mod==0.
-        int line_mod = 0;
-        size_t p = start;
-        if (start > 0){
-            for (;;){
-                char *nl = memchr(base + p, '\n', end - p);
-                if (!nl) { p = end; break; }
-                ++line_mod; line_mod &= 3;
-                p = (size_t)(nl - base) + 1;
-                if (line_mod == 0 || p >= end) break;
-            }
-        }
+        // Advance line by line until we hit a FASTQ header line ('@' at start-of-line).
+        size_t cursor = start;
+        while (cursor < end) {
+            if (base[cursor] == '@') {
+                // Record: header\n seq\n plus\n qual\n
+                char *nl1 = find_nl(base, cursor, fsz);                 if (!nl1) break;   // header end
+                size_t seq_beg = (size_t)(nl1 - base) + 1;
+                char *nl2 = find_nl(base, seq_beg, fsz);                if (!nl2) break;   // seq end
+                size_t plus_beg = (size_t)(nl2 - base) + 1;
+                char *nl3 = find_nl(base, plus_beg, fsz);               if (!nl3) break;   // plus end
+                size_t qual_beg = (size_t)(nl3 - base) + 1;
+                char *nl4 = find_nl(base, qual_beg, fsz);               if (!nl4) break;   // qual end
 
-        // Parse [p,end)
-        size_t cursor = p;
-        int in_rec = 0;
-        while (cursor < end){
-            char *nl = memchr(base + cursor, '\n', end - cursor);
-            if (!nl) break;
-            const char *line = base + cursor;
-            size_t L = (size_t)(nl - line);
-            if (L && line[L-1] == '\r') --L; // strip CR
+                // Ownership: process if header starts within this thread's range
+                if (cursor >= start) {
+                    size_t L = (size_t)(nl2 - (base + seq_beg));
+                    if (L && base[seq_beg + L - 1] == '\r') --L;        // trim CR
+                    if (L) {
+                        sketch_read_into_vec(base + seq_beg, (int)L, &V_thr[tid],
+                                             ctxmask, tupmask, Bitslen.obj, klen);
+                    }
+                }
 
-            if (in_rec == 1 && L) {
-                sketch_read_into_vec(line, (int)L, &V_thr[tid],
-                                     ctxmask, tupmask, Bitslen.obj, klen);
+                // Move to the next record
+                cursor = (size_t)(nl4 - base) + 1;
+                if (cursor >= end && tid != nth-1) break;
+            } else {
+                // Not a header at this line; skip to next newline
+                char *nl = find_nl(base, cursor, end);
+                if (!nl) break;
+                cursor = (size_t)(nl - base) + 1;
             }
-            in_rec = (in_rec + 1) & 3;
-            cursor = (size_t)(nl - base) + 1;
         }
     }
 
-    // Per-thread shrink (sort+counts)
-    size_t pre_elems=0; for (int t=0;t<nthr;++t) pre_elems += V_thr[t].n;
-    #pragma omp parallel for if (nthr>1 && pre_elems >= (1u<<20)) num_threads(opt->p) schedule(dynamic)
-    for (int t=0;t<nthr;++t) shrink_thread_vec(&V_thr[t], &C_thr[t]);
+    // Per-thread shrink (sort+dedup→counts)
+    size_t pre_elems=0; for (int t=0;t<nth;++t) pre_elems += V_thr[t].n;
+    #pragma omp parallel for if (nth>1 && pre_elems >= (1u<<20)) num_threads(opt->p) schedule(dynamic)
+    for (int t=0;t<nth;++t) shrink_thread_vec(&V_thr[t], &C_thr[t]);
 
-    size_t total_distinct=0; for (int t=0;t<nthr;++t) total_distinct += V_thr[t].n;
+    size_t total_distinct=0; for (int t=0;t<nth;++t) total_distinct += V_thr[t].n;
     if (total_distinct == 0){
         *sketch_index_slot = 0;
-        for (int t=0;t<nthr;++t){ v_free(&V_thr[t]); free(C_thr[t]); }
+        for (int t=0;t<nth;++t){ v_free(&V_thr[t]); free(C_thr[t]); }
         free(V_thr); free(C_thr);
         munmap(base, fsz); close(fd);
         return;
     }
 
-    // Buckets
+    // ---- bucketed parallel finalizer (unchanged) ----
     const unsigned BITS = clamp_bucket_bits_from_total(total_distinct);
     const size_t   NB   = (size_t)1u << BITS;
 
     size_t *bucket_totals = (size_t*)calloc(NB, sizeof(size_t));
-    size_t **thr_counts   = (size_t**)malloc((size_t)nthr * sizeof(size_t*));
+    size_t **thr_counts   = (size_t**)malloc((size_t)nth * sizeof(size_t*));
     if (!bucket_totals || !thr_counts) err(errno, "%s(): OOM bucket meta", __func__);
-    for (int t=0;t<nthr;++t){
+    for (int t=0;t<nth;++t){
         thr_counts[t] = (size_t*)calloc(NB, sizeof(size_t));
         if (!thr_counts[t]) err(errno, "%s(): OOM thr_counts", __func__);
     }
 
     #pragma omp parallel for num_threads(opt->p) schedule(static)
-    for (int t=0; t<nthr; ++t){
+    for (int t=0; t<nth; ++t){
         uint64_t *A = V_thr[t].a; size_t n = V_thr[t].n;
         for (size_t i=0;i<n;++i){
             unsigned b = (unsigned)(A[i] >> (64 - BITS));
@@ -1315,7 +1329,7 @@ static void sketch_one_plain_fastq_mmap(sketch_opt_t *opt,
         }
     }
     for (size_t b=0;b<NB;++b){
-        size_t sum=0; for (int t=0;t<nthr;++t) sum += thr_counts[t][b];
+        size_t sum=0; for (int t=0;t<nth;++t) sum += thr_counts[t][b];
         bucket_totals[b] = sum;
     }
 
@@ -1328,19 +1342,19 @@ static void sketch_one_plain_fastq_mmap(sketch_opt_t *opt,
     uint32_t *B_vals = (uint32_t*)malloc(TOTAL_ENTRIES*sizeof(uint32_t));
     if (!B_keys || !B_vals) err(errno, "%s(): OOM bucket KV", __func__);
 
-    size_t **thr_write = (size_t**)malloc((size_t)nthr * sizeof(size_t*));
+    size_t **thr_write = (size_t**)malloc((size_t)nth * sizeof(size_t*));
     if (!thr_write) err(errno, "%s(): OOM thr_write", __func__);
-    for (int t=0;t<nthr;++t){
+    for (int t=0;t<nth;++t){
         thr_write[t] = (size_t*)malloc(NB*sizeof(size_t));
         if (!thr_write[t]) err(errno, "%s(): OOM thr_write[t]", __func__);
     }
     for (size_t b=0;b<NB;++b){
         size_t off = bucket_off[b];
-        for (int t=0;t<nthr;++t){ thr_write[t][b] = off; off += thr_counts[t][b]; }
+        for (int t=0;t<nth;++t){ thr_write[t][b] = off; off += thr_counts[t][b]; }
     }
 
     #pragma omp parallel for num_threads(opt->p) schedule(static)
-    for (int t=0; t<nthr; ++t){
+    for (int t=0; t<nth; ++t){
         uint64_t *Ak = V_thr[t].a; uint32_t *Av = C_thr[t]; size_t n = V_thr[t].n;
         size_t *pos = thr_write[t];
         for (size_t i=0;i<n;++i){
@@ -1352,7 +1366,7 @@ static void sketch_one_plain_fastq_mmap(sketch_opt_t *opt,
         }
     }
 
-    for (int t=0;t<nthr;++t){ v_free(&V_thr[t]); free(C_thr[t]); free(thr_counts[t]); free(thr_write[t]); }
+    for (int t=0;t<nth;++t){ v_free(&V_thr[t]); free(C_thr[t]); free(thr_counts[t]); free(thr_write[t]); }
     free(V_thr); free(C_thr); free(thr_counts); free(thr_write);
 
     // per-bucket KV sort+merge
@@ -1404,6 +1418,7 @@ static void sketch_one_plain_fastq_mmap(sketch_opt_t *opt,
     munmap(base, fsz);
     close(fd);
 }
+
 
 // =================== IN-PLACE REPLACEMENT ===================
 static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_tab_t *tab, int BATCH_READS)
