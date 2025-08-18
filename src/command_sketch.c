@@ -4,6 +4,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 
+#include "global_basic.h"
 #include "command_sketch.h"
 #include "sketch_rearrange.h"
 #include "kssdlib_sort.h"
@@ -32,9 +33,7 @@ static char tmp_fname[PATHLEN + 20];
 static struct stat tmpstat;
 
 // functions
-void test_read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val,
-                                          infile_tab_t *infile_stat,
-                                          int batch_size);
+void test_read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val,infile_tab_t *infile_stat,int batch_size);
 uint32_t get_sketching_id(uint32_t hclen, uint32_t holen, uint32_t iolen, uint32_t drfold, uint32_t FILTER)
 {
     return GET_SKETCHING_ID(hclen, holen, iolen, drfold, FILTER);
@@ -951,30 +950,6 @@ static inline SortedKV_Arrays_t build_kv_from_vec(u64vec *vec, bool has_abundanc
     return kv;
 }
 
-static inline void apply_conflict_filter(SortedKV_Arrays_t *kv,bool has_abundance,
-                                         bool conflict_flag,uint32_t nobjbits)
-{
-    if (conflict_flag || kv->len == 0) return;
-    if (has_abundance) {
-        remove_ctx_with_conflict_obj(kv, nobjbits);
-    } else {
-        remove_ctx_with_conflict_obj_noabund(kv->keys, &kv->len, nobjbits);
-    }
-}
-
-static inline void write_index_payload_and_free(FILE *comb,FILE *comb_ab,
-                bool has_abundance,uint64_t *sketch_index_slot, SortedKV_Arrays_t *kv)
-{
-    *sketch_index_slot = kv->len;
-    if (kv->len) {
-        fwrite(kv->keys,   sizeof(uint64_t), kv->len, comb);
-        if (has_abundance) fwrite(kv->values, sizeof(uint32_t), kv->len, comb_ab);
-    }
-    free(kv->keys);   kv->keys   = NULL;
-    free(kv->values); kv->values = NULL;
-    kv->len = 0;
-}
-
 // ---------- unified FASTQ loader (gz or plain) → u64vec ----------
 // Requires:
 //   - sketch_read_into_vec(const char*, int, u64vec*, uint64_t, uint64_t, uint8_t, uint32_t)
@@ -988,63 +963,16 @@ static inline int has_suffix(const char *s, const char *suf) {
     return (nf<=ns) && (memcmp(s+ns-nf, suf, nf)==0);
 }
 
-// Plain FASTQ → mmap parser (no copies). Pushes seq lines to vec.
-static void load_fastq_plain_mmap_into_vec(const char *path,
-                                           u64vec *vec,
-                                           uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits,
-                                           uint32_t klen)
-{
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) err(errno, "%s(): open %s", __func__, path);
+// =====================================================
+// Mode-A helpers: single-vector collectors (gz / plain)
+// =====================================================
 
-#ifdef POSIX_FADV_SEQUENTIAL
-    posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
-#endif
-
-    struct stat st;
-    if (fstat(fd, &st) != 0) err(errno, "%s(): fstat %s", __func__, path);
-    size_t fsz = (size_t)st.st_size;
-    if (fsz == 0) { close(fd); return; }
-
-    char *base = (char*)mmap(NULL, fsz, PROT_READ, MAP_PRIVATE, fd, 0);
-    if (base == MAP_FAILED) err(errno, "%s(): mmap %s", __func__, path);
-#ifdef MADV_SEQUENTIAL
-    madvise(base, fsz, MADV_SEQUENTIAL);
-#endif
-#ifdef MADV_WILLNEED
-    madvise(base, fsz, MADV_WILLNEED);
-#endif
-
-    // walk lines; every 2nd of each 4 is sequence
-    size_t line_start = 0;
-    unsigned line_mod = 0; // 0=@header,1=seq,2=+,3=qual
-    for (size_t i = 0; i < fsz; ++i) {
-        if (base[i] != '\n') continue;
-        size_t L = i - line_start;
-        // trim CR if present
-        if (L && base[i-1] == '\r') --L;
-        if (line_mod == 1 && L) {
-            sketch_read_into_vec(base + line_start, (int)L, vec,
-                                 ctxmask, tupmask, nobjbits, klen);
-        }
-        line_start = i + 1;
-        line_mod = (line_mod + 1) & 3;
-    }
-    // (optional) handle last line without newline: FASTQ usually ends with '\n', skip for simplicity
-
-    munmap(base, fsz);
-    close(fd);
-}
-
-// Gzipped FASTQ via zlib+kseq
-static void load_fastq_gz_into_vec(const char *path,
-                                   u64vec *vec,
-                                   uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits,
-                                   uint32_t klen)
+// Single-vector collector for gz FASTQ
+static void load_fastq_gz_into_single_vec(const char *path, u64vec *vec, uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits,uint32_t klen)
 {
     gzFile in = gzopen(path, "r");
     if (!in) err(errno, "%s(): Cannot open %s", __func__, path);
-    (void)gzbuffer(in, 4u<<20); // 4MB inflate buffer
+    (void)gzbuffer(in, 4u<<20);
 
     kseq_t *seq = kseq_init(in);
     if (!seq) err(errno, "%s(): kseq_init %s", __func__, path);
@@ -1059,27 +987,65 @@ static void load_fastq_gz_into_vec(const char *path,
     gzclose(in);
 }
 
-// Unified entry: auto-detect by suffix; also honor "-" = stdin.gz if you want (optional)
-static void load_fastq_into_vec(const char *path,
-                                u64vec *vec,
-                                uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits,
-                                uint32_t klen)
+// Single-vector collector for plain FASTQ via mmap (no copies)
+static void load_fastq_plain_mmap_into_single_vec(const char *path, u64vec *vec, uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits, uint32_t klen)
 {
-    if (has_suffix(path, ".gz")) {
-        load_fastq_gz_into_vec(path, vec, ctxmask, tupmask, nobjbits, klen);
-    } else {
-        load_fastq_plain_mmap_into_vec(path, vec, ctxmask, tupmask, nobjbits, klen);
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) err(errno, "%s(): open %s", __func__, path);
+#ifdef POSIX_FADV_SEQUENTIAL
+    posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
+#endif
+    struct stat st;
+    if (fstat(fd, &st) != 0) err(errno, "%s(): fstat %s", __func__, path);
+    const size_t fsz = (size_t)st.st_size;
+    if (fsz == 0) { close(fd); return; }
+
+    char *base = (char*)mmap(NULL, fsz, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (base == MAP_FAILED) err(errno, "%s(): mmap %s", __func__, path);
+#ifdef MADV_SEQUENTIAL
+    madvise(base, fsz, MADV_SEQUENTIAL);
+#endif
+#ifdef MADV_WILLNEED
+    madvise(base, fsz, MADV_WILLNEED);
+#endif
+
+    // Walk lines; every 2nd of each 4 is the sequence
+    size_t line_start = 0;
+    unsigned line_mod = 0; // 0=@hdr,1=seq,2=+,3=qual
+    for (size_t i = 0; i < fsz; ++i) {
+        if (base[i] != '\n') continue;
+        size_t L = i - line_start;
+        if (L && base[i-1] == '\r') --L; // trim CR
+        if (line_mod == 1 && L) {
+            sketch_read_into_vec(base + line_start, (int)L, vec,
+                                 ctxmask, tupmask, nobjbits, klen);
+        }
+        line_start = i + 1;
+        line_mod = (line_mod + 1) & 3;
     }
+    // (Optional) handle last unterminated line — FASTQ typically ends with '\n'
+
+    munmap(base, fsz);
+    close(fd);
 }
 
-// ---------------- Mode A: per-genome parallel (vector + radix + counts) ----------------
+// Tiny wrapper to choose gz vs plain
+static inline void load_fastq_into_single_vec(const char *path,u64vec *vec,uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits,uint32_t klen)
+{
+    if (has_suffix(path, ".gz"))load_fastq_gz_into_single_vec(path, vec, ctxmask, tupmask, nobjbits, klen);
+    else load_fastq_plain_mmap_into_single_vec(path, vec, ctxmask, tupmask, nobjbits, klen);
+}
+
+// =====================================================
+// ---- Mode A: per-genome parallel (vector + counts) --
+// =====================================================
 static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, int batch_size)
 {
     const int nfiles = tab->infile_num;
     const bool has_abundance = opt->abundance;
 
     FILE *comb = fopen(format_string("%s/%s", opt->outdir, combined_sketch_suffix), "wb");
-    if (!comb) err(errno, "%s() open comb", __func__);
+    if (!comb) err(errno, "%s() open file error: %s/%s", __func__, opt->outdir, combined_sketch_suffix);
     setvbuf(comb, NULL, _IOFBF, 8u << 20);
 
     FILE *comb_ab = NULL;
@@ -1092,6 +1058,7 @@ static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, 
     uint64_t *sketch_index = (uint64_t *)calloc((size_t)nfiles + 1, sizeof(uint64_t));
     if (!sketch_index) err(errno, "%s(): OOM index", __func__);
 
+    // Process in batches of files to cap memory if needed
     for (int batch_start = 0; batch_start < nfiles; batch_start += batch_size) {
         const int batch_end  = (batch_start + batch_size <= nfiles) ? (batch_start + batch_size) : nfiles;
         const int this_batch = batch_end - batch_start;
@@ -1108,27 +1075,21 @@ static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, 
             if (!batch_vals) err(errno, "%s(): OOM batch_vals", __func__);
         }
 
+        // One thread per file (parallel across files)
         #pragma omp parallel for num_threads(opt->p) schedule(dynamic, 1)
         for (int bi = 0; bi < this_batch; ++bi) {
             const int file_idx = batch_start + bi;
             const char *fpath  = tab->organized_infile_tab[file_idx].fpath;
 
-            gzFile infile = gzopen(fpath, "r");
-            if (!infile) err(errno, "%s(): Cannot open %s", __func__, fpath);
-            (void)gzbuffer(infile, 4u << 20);
-
-            kseq_t *seq = kseq_init(infile);
-            if (!seq) err(errno, "%s(): kseq_init %s", __func__, fpath);
-
             u64vec vec; v_init(&vec, 1u << 15);
-            while (kseq_read(seq) >= 0) {
-                sketch_read_into_vec(seq->seq.s, (int)seq->seq.l,
-                                     &vec, ctxmask, tupmask, Bitslen.obj, klen);
-            }
+            load_fastq_into_single_vec(fpath, &vec, ctxmask, tupmask, Bitslen.obj, klen);
 
             if (vec.n) {
                 SortedKV_Arrays_t kv = build_kv_from_vec(&vec, has_abundance);
-                apply_conflict_filter(&kv, has_abundance, opt->conflict, Bitslen.obj);
+                if (!opt->conflict){
+                    if(has_abundance) remove_ctx_with_conflict_obj(&kv, Bitslen.obj);
+                    else remove_ctx_with_conflict_obj_noabund (kv.keys, &(kv.len), Bitslen.obj);
+                }
                 batch_keys[bi] = kv.keys;
                 lens[bi]       = kv.len;
                 if (has_abundance) batch_vals[bi] = kv.values;
@@ -1136,10 +1097,7 @@ static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, 
             } else {
                 lens[bi] = 0;
             }
-
             v_free(&vec);
-            kseq_destroy(seq);
-            gzclose(infile);
         }
 
         // write batch in order
@@ -1156,13 +1114,15 @@ static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, 
             }
         }
 
-        free_all(batch_keys,lens,NULL);
+        free(batch_keys);
+        free(lens);
         if (has_abundance) free(batch_vals);
 
         fprintf(stderr, "\r%d/%d genomes processed", batch_end, nfiles);
         fflush(stderr);
     }
 
+    // prefix-sum index and finish
     for (int i = 0; i < nfiles; ++i) sketch_index[i + 1] += sketch_index[i];
     write_to_file(format_string("%s/%s", opt->outdir, idx_sketch_suffix),
                   sketch_index, (size_t)(nfiles + 1) * sizeof(uint64_t));
@@ -1172,15 +1132,25 @@ static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, 
     write_sketch_stat(opt->outdir, tab);
 }
 
-// ---------------- Mode B: vector + bucketed parallel finalizer (with counts) ----------------
+// ============================
+// Unified helpers + Mode-B
+// ============================
+
+
+// C helper for finding '\n' between [off, lim)
+static inline char *find_nl(const char *base, size_t off, size_t lim) {
+    if (off >= lim) return NULL;
+    return (char*)memchr(base + off, '\n', lim - off);
+}
+
+// ---------- shrink helpers ----------
 static inline unsigned clamp_bucket_bits_from_total(size_t total_distinct){
-    // target ~4k entries per bucket; clamp BITS to [8..14]
+    // target ~4k entries per bucket; clamp to [8..14]
     size_t target_buckets = (total_distinct / 4096) ? (total_distinct / 4096) : 256;
     unsigned BITS = 8;
     while (((size_t)1 << BITS) < target_buckets && BITS < 14) ++BITS;
     return BITS;
 }
-
 
 static inline size_t shrink_kv_inplace_u64_u32(uint64_t *k, uint32_t *v, size_t n){
     if (!n) return 0;
@@ -1192,43 +1162,65 @@ static inline size_t shrink_kv_inplace_u64_u32(uint64_t *k, uint32_t *v, size_t 
     return w+1;
 }
 
-// --- helpers needed by Mode-B ---
-// Put these includes near your other system headers (once per file)
+// ---------- collectors (no finalization here) ----------
+static void collect_gz_into_vectors(const char *path, int nth, int nthreads_for_omp,
+                                    u64vec *V_thr,
+                                    uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits, uint32_t klen,
+                                    int BATCH_READS)
+{
+    gzFile in = gzopen(path, "r");
+    if (!in) err(errno, "%s(): Cannot open %s", __func__, path);
+    (void)gzbuffer(in, 4u<<20);
+    kseq_t *seq = kseq_init(in);
+    if (!seq) err(errno, "%s(): kseq_init %s", __func__, path);
 
-// C helper for finding '\n' between [off, lim)
-static inline char *find_nl(const char *base, size_t off, size_t lim) {
-    if (off >= lim) return NULL;
-    return (char*)memchr(base + off, '\n', lim - off);
+    read_span_t *R = (read_span_t*)malloc((size_t)BATCH_READS*sizeof(*R));
+    if (!R) err(errno, "%s(): OOM batch reads", __func__);
+    int rcnt=0;
+
+    int ret;
+    do{
+        ret = kseq_read(seq);
+        if (ret >= 0){
+            char *buf = (char*)malloc(seq->seq.l + 1);
+            if (!buf) err(errno, "%s(): OOM read buf", __func__);
+            memcpy(buf, seq->seq.s, seq->seq.l);
+            buf[seq->seq.l] = '\0';
+            R[rcnt].s = buf; R[rcnt].l = (int)seq->seq.l;
+            ++rcnt;
+        }
+        if (rcnt >= BATCH_READS || ret < 0){
+            #pragma omp parallel for if (nth>1) num_threads(nthreads_for_omp) schedule(static)
+            for (int ri=0; ri<rcnt; ++ri){
+                int tid = 0;
+                #ifdef _OPENMP
+                tid = omp_get_thread_num();
+                #endif
+                sketch_read_into_vec(R[ri].s, R[ri].l, &V_thr[tid],
+                                     ctxmask, tupmask, nobjbits, klen);
+            }
+            for (int i=0;i<rcnt;++i) free(R[i].s);
+            rcnt=0;
+        }
+    } while (ret >= 0);
+    free(R);
+    kseq_destroy(seq);
+    gzclose(in);
 }
 
-// Plain FASTQ fast path: mmap + in-file parallel + bucketed finalizer
-// Writes outputs to comb/comb_ab and updates *sketch_index_slot.
-// Requires your existing utilities/types:
-//  - u64vec, v_init, v_free
-//  - shrink_thread_vec(u64vec*, uint32_t**)
-//  - clamp_bucket_bits_from_total(size_t)
-//  - radix_sort_kv_u64(...), shrink_kv_inplace_u64_u32(...)
-//  - apply_conflict_filter(...), write_index_payload_and_free(...)
-//  - globals/params: ctxmask, tupmask, Bitslen.obj, klen
-static void sketch_one_plain_fastq_mmap(sketch_opt_t *opt,
-                                        const char *path,
-                                        uint64_t *sketch_index_slot,
-                                        FILE *comb, FILE *comb_ab)
+static void collect_plain_mmap_into_vectors(const char *path, int nth, int nthreads_for_omp,
+                                            u64vec *V_thr,
+                                            uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits, uint32_t klen)
 {
-    const bool write_ab = opt->abundance;
-    const int  nth      = (opt->p > 0 ? opt->p : 1);
-
     int fd = open(path, O_RDONLY);
     if (fd < 0) err(errno, "%s(): open %s", __func__, path);
-
 #ifdef POSIX_FADV_SEQUENTIAL
     posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
 #endif
-
     struct stat st;
     if (fstat(fd, &st) != 0) err(errno, "%s(): fstat %s", __func__, path);
     const size_t fsz = (size_t)st.st_size;
-    if (fsz == 0) { *sketch_index_slot = 0; close(fd); return; }
+    if (fsz == 0) { close(fd); return; }
 
     char *base = (char*)mmap(NULL, fsz, PROT_READ, MAP_PRIVATE, fd, 0);
     if (base == MAP_FAILED) err(errno, "%s(): mmap %s", __func__, path);
@@ -1239,54 +1231,37 @@ static void sketch_one_plain_fastq_mmap(sketch_opt_t *opt,
     madvise(base, fsz, MADV_WILLNEED);
 #endif
 
-    // Per-thread accumulators
-    u64vec    *V_thr = (u64vec*)malloc((size_t)nth*sizeof(u64vec));
-    uint32_t **C_thr = (uint32_t**)calloc((size_t)nth, sizeof(uint32_t*));
-    if (!V_thr || !C_thr) err(errno, "%s(): OOM V_thr/C_thr", __func__);
-    for (int t=0; t<nth; ++t) v_init(&V_thr[t], 1u<<15);
-
-    // Split into byte ranges; each thread owns records whose header '@' starts in its [start,end)
     const size_t chunk = (fsz + (size_t)nth - 1) / (size_t)nth;
 
-    #pragma omp parallel for if (nth>1) num_threads(opt->p) schedule(static)
+    #pragma omp parallel for if (nth>1) num_threads(nthreads_for_omp) schedule(static)
     for (int tid=0; tid<nth; ++tid){
         size_t start = (size_t)tid * chunk;
         size_t end   = (tid == nth-1) ? fsz : start + chunk;
         if (start >= fsz) { V_thr[tid].n = 0; continue; }
+        if (start > 0) { while (start < end && base[start-1] != '\n') ++start; }
 
-        // Align to a line boundary
-        if (start > 0){
-            while (start < end && base[start-1] != '\n') ++start;
-        }
-
-        // Advance line by line until we hit a FASTQ header line ('@' at start-of-line).
         size_t cursor = start;
         while (cursor < end) {
             if (base[cursor] == '@') {
-                // Record: header\n seq\n plus\n qual\n
-                char *nl1 = find_nl(base, cursor, fsz);                 if (!nl1) break;   // header end
+                char *nl1 = find_nl(base, cursor, fsz);                 if (!nl1) break;
                 size_t seq_beg = (size_t)(nl1 - base) + 1;
-                char *nl2 = find_nl(base, seq_beg, fsz);                if (!nl2) break;   // seq end
+                char *nl2 = find_nl(base, seq_beg, fsz);                if (!nl2) break;
                 size_t plus_beg = (size_t)(nl2 - base) + 1;
-                char *nl3 = find_nl(base, plus_beg, fsz);               if (!nl3) break;   // plus end
+                char *nl3 = find_nl(base, plus_beg, fsz);               if (!nl3) break;
                 size_t qual_beg = (size_t)(nl3 - base) + 1;
-                char *nl4 = find_nl(base, qual_beg, fsz);               if (!nl4) break;   // qual end
+                char *nl4 = find_nl(base, qual_beg, fsz);               if (!nl4) break;
 
-                // Ownership: process if header starts within this thread's range
                 if (cursor >= start) {
                     size_t L = (size_t)(nl2 - (base + seq_beg));
-                    if (L && base[seq_beg + L - 1] == '\r') --L;        // trim CR
+                    if (L && base[seq_beg + L - 1] == '\r') --L;
                     if (L) {
                         sketch_read_into_vec(base + seq_beg, (int)L, &V_thr[tid],
-                                             ctxmask, tupmask, Bitslen.obj, klen);
+                                             ctxmask, tupmask, nobjbits, klen);
                     }
                 }
-
-                // Move to the next record
                 cursor = (size_t)(nl4 - base) + 1;
                 if (cursor >= end && tid != nth-1) break;
             } else {
-                // Not a header at this line; skip to next newline
                 char *nl = find_nl(base, cursor, end);
                 if (!nl) break;
                 cursor = (size_t)(nl - base) + 1;
@@ -1294,33 +1269,42 @@ static void sketch_one_plain_fastq_mmap(sketch_opt_t *opt,
         }
     }
 
-    // Per-thread shrink (sort+dedup→counts)
+    munmap(base, fsz);
+    close(fd);
+}
+
+// ---------- shared finalizer (shrink + bucketed merge) ----------
+static SortedKV_Arrays_t finalize_vectors_bucketed(u64vec *V_thr, int nth, int nthreads_for_omp)
+{
+    SortedKV_Arrays_t out = (SortedKV_Arrays_t){0};
+    uint32_t **C_thr = (uint32_t**)calloc((size_t)nth, sizeof(uint32_t*));
+    if (!C_thr) return out;
+
     size_t pre_elems=0; for (int t=0;t<nth;++t) pre_elems += V_thr[t].n;
-    #pragma omp parallel for if (nth>1 && pre_elems >= (1u<<20)) num_threads(opt->p) schedule(dynamic)
-    for (int t=0;t<nth;++t) shrink_thread_vec(&V_thr[t], &C_thr[t]);
+
+    #pragma omp parallel for if (nth>1 && pre_elems >= (1u<<20)) num_threads(nthreads_for_omp) schedule(dynamic)
+    for (int t=0; t<nth; ++t) shrink_thread_vec(&V_thr[t], &C_thr[t]);
 
     size_t total_distinct=0; for (int t=0;t<nth;++t) total_distinct += V_thr[t].n;
     if (total_distinct == 0){
-        *sketch_index_slot = 0;
         for (int t=0;t<nth;++t){ v_free(&V_thr[t]); free(C_thr[t]); }
         free(V_thr); free(C_thr);
-        munmap(base, fsz); close(fd);
-        return;
+        return out;
     }
 
-    // ---- bucketed parallel finalizer (unchanged) ----
     const unsigned BITS = clamp_bucket_bits_from_total(total_distinct);
     const size_t   NB   = (size_t)1u << BITS;
 
     size_t *bucket_totals = (size_t*)calloc(NB, sizeof(size_t));
     size_t **thr_counts   = (size_t**)malloc((size_t)nth * sizeof(size_t*));
-    if (!bucket_totals || !thr_counts) err(errno, "%s(): OOM bucket meta", __func__);
+    if (!bucket_totals || !thr_counts) { free(bucket_totals); free(thr_counts); goto CLEAN_EMPTY; }
+
     for (int t=0;t<nth;++t){
         thr_counts[t] = (size_t*)calloc(NB, sizeof(size_t));
-        if (!thr_counts[t]) err(errno, "%s(): OOM thr_counts", __func__);
+        if (!thr_counts[t]) { for (int j=0;j<t;++j) free(thr_counts[j]); free(thr_counts); free(bucket_totals); goto CLEAN_EMPTY; }
     }
 
-    #pragma omp parallel for num_threads(opt->p) schedule(static)
+    #pragma omp parallel for num_threads(nthreads_for_omp) schedule(static)
     for (int t=0; t<nth; ++t){
         uint64_t *A = V_thr[t].a; size_t n = V_thr[t].n;
         for (size_t i=0;i<n;++i){
@@ -1334,26 +1318,26 @@ static void sketch_one_plain_fastq_mmap(sketch_opt_t *opt,
     }
 
     size_t *bucket_off = (size_t*)malloc((NB+1)*sizeof(size_t));
-    if (!bucket_off) err(errno, "%s(): OOM bucket_off", __func__);
+    if (!bucket_off) { for (int t=0;t<nth;++t) free(thr_counts[t]); free(thr_counts); free(bucket_totals); goto CLEAN_EMPTY; }
     bucket_off[0]=0; for (size_t b=0;b<NB;++b) bucket_off[b+1] = bucket_off[b] + bucket_totals[b];
-    const size_t TOTAL_ENTRIES = bucket_off[NB];
+    const size_t TOTAL = bucket_off[NB];
 
-    uint64_t *B_keys = (uint64_t*)malloc(TOTAL_ENTRIES*sizeof(uint64_t));
-    uint32_t *B_vals = (uint32_t*)malloc(TOTAL_ENTRIES*sizeof(uint32_t));
-    if (!B_keys || !B_vals) err(errno, "%s(): OOM bucket KV", __func__);
+    uint64_t *B_keys = (uint64_t*)malloc(TOTAL*sizeof(uint64_t));
+    uint32_t *B_vals = (uint32_t*)malloc(TOTAL*sizeof(uint32_t));
+    if (!B_keys || !B_vals) { free(B_keys); free(B_vals); free(bucket_off); for (int t=0;t<nth;++t) free(thr_counts[t]); free(thr_counts); free(bucket_totals); goto CLEAN_EMPTY; }
 
     size_t **thr_write = (size_t**)malloc((size_t)nth * sizeof(size_t*));
-    if (!thr_write) err(errno, "%s(): OOM thr_write", __func__);
+    if (!thr_write) { free(B_keys); free(B_vals); free(bucket_off); for (int t=0;t<nth;++t) free(thr_counts[t]); free(thr_counts); free(bucket_totals); goto CLEAN_EMPTY; }
     for (int t=0;t<nth;++t){
         thr_write[t] = (size_t*)malloc(NB*sizeof(size_t));
-        if (!thr_write[t]) err(errno, "%s(): OOM thr_write[t]", __func__);
+        if (!thr_write[t]) { for (int j=0;j<t;++j) free(thr_write[j]); free(thr_write); free(B_keys); free(B_vals); free(bucket_off); for (int j2=0;j2<nth;++j2) free(thr_counts[j2]); free(thr_counts); free(bucket_totals); goto CLEAN_EMPTY; }
     }
     for (size_t b=0;b<NB;++b){
         size_t off = bucket_off[b];
         for (int t=0;t<nth;++t){ thr_write[t][b] = off; off += thr_counts[t][b]; }
     }
 
-    #pragma omp parallel for num_threads(opt->p) schedule(static)
+    #pragma omp parallel for num_threads(nthreads_for_omp) schedule(static)
     for (int t=0; t<nth; ++t){
         uint64_t *Ak = V_thr[t].a; uint32_t *Av = C_thr[t]; size_t n = V_thr[t].n;
         size_t *pos = thr_write[t];
@@ -1369,13 +1353,12 @@ static void sketch_one_plain_fastq_mmap(sketch_opt_t *opt,
     for (int t=0;t<nth;++t){ v_free(&V_thr[t]); free(C_thr[t]); free(thr_counts[t]); free(thr_write[t]); }
     free(V_thr); free(C_thr); free(thr_counts); free(thr_write);
 
-    // per-bucket KV sort+merge
     uint64_t **bk_keys = (uint64_t**)malloc(NB*sizeof(uint64_t*));
     uint32_t **bk_vals = (uint32_t**)malloc(NB*sizeof(uint32_t*));
     size_t    *bk_len  = (size_t*)   malloc(NB*sizeof(size_t));
-    if (!bk_keys || !bk_vals || !bk_len) err(errno, "%s(): OOM bucket outs", __func__);
+    if (!bk_keys || !bk_vals || !bk_len) { free(bk_keys); free(bk_vals); free(bk_len); free(B_keys); free(B_vals); free(bucket_off); free(bucket_totals); goto CLEAN_EMPTY; }
 
-    #pragma omp parallel for num_threads(opt->p) schedule(dynamic)
+    #pragma omp parallel for num_threads(nthreads_for_omp) schedule(dynamic)
     for (size_t b=0; b<NB; ++b){
         const size_t begin = bucket_off[b], end = bucket_off[b+1];
         const size_t n = end - begin;
@@ -1385,7 +1368,7 @@ static void sketch_one_plain_fastq_mmap(sketch_opt_t *opt,
         size_t m = shrink_kv_inplace_u64_u32(kseg, vseg, n);
         uint64_t *ko = (uint64_t*)malloc(m*sizeof(uint64_t));
         uint32_t *vo = (uint32_t*)malloc(m*sizeof(uint32_t));
-        if (!ko || !vo) err(errno, "%s(): OOM bucket kv out", __func__);
+        if (!ko || !vo) err(EXIT_FAILURE, "%s(): OOM bucket kv out", __func__);
         memcpy(ko, kseg, m*sizeof(uint64_t));
         memcpy(vo, vseg, m*sizeof(uint32_t));
         bk_keys[b]=ko; bk_vals[b]=vo; bk_len[b]=m;
@@ -1394,37 +1377,50 @@ static void sketch_one_plain_fastq_mmap(sketch_opt_t *opt,
     free(B_keys); free(B_vals); free(bucket_totals);
 
     size_t *out_off = (size_t*)malloc((NB+1)*sizeof(size_t));
-    if (!out_off) err(errno, "%s(): OOM out_off", __func__);
+    if (!out_off) { free(bk_keys); free(bk_vals); free(bk_len); free(bucket_off); goto CLEAN_EMPTY; }
     out_off[0]=0; for (size_t b=0;b<NB;++b) out_off[b+1] = out_off[b] + bk_len[b];
     const size_t M = out_off[NB];
 
-    uint64_t *out_keys = (uint64_t*)malloc(M*sizeof(uint64_t));
-    uint32_t *out_vals = (uint32_t*)malloc(M*sizeof(uint32_t));
-    if (!out_keys || !out_vals) err(errno, "%s(): OOM final kv", __func__);
+    out.keys   = (uint64_t*)malloc(M*sizeof(uint64_t));
+    out.values = (uint32_t*)malloc(M*sizeof(uint32_t));
+    if (!out.keys || !out.values) { free(out.keys); free(out.values); out = (SortedKV_Arrays_t){0}; }
 
-    #pragma omp parallel for num_threads(opt->p) schedule(static)
+    #pragma omp parallel for num_threads(nthreads_for_omp) schedule(static)
     for (size_t b=0; b<NB; ++b){
         if (!bk_len[b]) continue;
-        memcpy(out_keys + out_off[b], bk_keys[b], bk_len[b]*sizeof(uint64_t));
-        memcpy(out_vals + out_off[b], bk_vals[b], bk_len[b]*sizeof(uint32_t));
+        memcpy(out.keys  + out_off[b], bk_keys[b], bk_len[b]*sizeof(uint64_t));
+        memcpy(out.values+ out_off[b], bk_vals[b], bk_len[b]*sizeof(uint32_t));
         free(bk_keys[b]); free(bk_vals[b]);
     }
     free(bk_keys); free(bk_vals); free(bk_len); free(bucket_off); free(out_off);
 
-    SortedKV_Arrays_t kv = (SortedKV_Arrays_t){ .keys=out_keys, .values=out_vals, .len=M };
-    apply_conflict_filter(&kv, /*has_abundance=*/true, opt->conflict, Bitslen.obj);
-    write_index_payload_and_free(comb, (write_ab?comb_ab:NULL), write_ab, sketch_index_slot, &kv);
+    out.len = M;
+    return out;
 
-    munmap(base, fsz);
-    close(fd);
+CLEAN_EMPTY:
+    for (int t=0;t<nth;++t){ v_free(&V_thr[t]); /* C_thr[t] may be NULL */ free(C_thr[t]); }
+    free(V_thr); free(C_thr);
+    return (SortedKV_Arrays_t){0};
 }
 
 
-// =================== IN-PLACE REPLACEMENT ===================
+static inline void write_index_payload_and_free(FILE *comb, FILE *comb_ab,
+                bool write_ab, uint64_t *sketch_index_slot, SortedKV_Arrays_t *kv)
+{
+    *sketch_index_slot = kv->len;
+    if (kv->len) {
+        fwrite(kv->keys,   sizeof(uint64_t), kv->len, comb);
+        if (write_ab) fwrite(kv->values, sizeof(uint32_t), kv->len, comb_ab);
+    }
+    free(kv->keys);   kv->keys   = NULL;
+    free(kv->values); kv->values = NULL;
+    kv->len = 0;
+}
+
+// =================== Mode B (in-file parallel; gz + mmap) ===================
 static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_tab_t *tab, int BATCH_READS)
 {
     const int nfiles = tab->infile_num;
-    const bool has_abundance = true; // Mode-B computes counts; write only if opt->abundance
 
     FILE *comb = fopen(format_string("%s/%s", opt->outdir, combined_sketch_suffix), "wb");
     if (!comb) err(errno, "%s() open file error: %s/%s", __func__, opt->outdir, combined_sketch_suffix);
@@ -1442,188 +1438,36 @@ static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_t
 
     for (int f=0; f<nfiles; ++f){
         const char *path = tab->organized_infile_tab[f].fpath;
-
-        // If plain FASTQ (.fastq/.fq), use the mmap fast path and skip the zlib branch.
-        if (!has_suffix(path, ".gz")) {
-            sketch_one_plain_fastq_mmap(opt, path, &sketch_index[f+1], comb, (opt->abundance?comb_ab:NULL));
-            fprintf(stderr, "\r%d/%d genomes processed", f+1, nfiles); fflush(stderr);
-            continue;
-        }
-
-        // ---- gzip path (your existing Mode-B batching) ----
-        gzFile in = gzopen(path, "r");
-        if (!in) err(errno, "%s(): Cannot open %s", __func__, path);
-        (void)gzbuffer(in, 4u<<20);
-        kseq_t *seq = kseq_init(in);
-
-        typedef struct { char *s; int l; } read_span_t;
-        read_span_t *R = (read_span_t*)malloc((size_t)BATCH_READS*sizeof(*R));
-        if (!R) err(errno, "%s(): OOM batch reads", __func__);
-        int rcnt=0;
-
         const int nth = (opt->p > 0 ? opt->p : 1);
+
+        // per-thread accumulators
         u64vec *V_thr = (u64vec*)malloc((size_t)nth*sizeof(u64vec));
         if (!V_thr) err(errno, "%s(): OOM V_thr", __func__);
         for (int t=0;t<nth;++t) v_init(&V_thr[t], 1u<<15);
 
-        uint32_t **C_thr = (uint32_t**)calloc((size_t)nth, sizeof(uint32_t*));
-        if (!C_thr) err(errno, "%s(): OOM C_thr", __func__);
+        // 1) collect (mmap for plain; kseq for .gz)
+        if (!has_suffix(path, ".gz"))
+            collect_plain_mmap_into_vectors(path, nth, opt->p, V_thr, ctxmask, tupmask, Bitslen.obj, klen);
+        else
+            collect_gz_into_vectors(path, nth, opt->p, V_thr, ctxmask, tupmask, Bitslen.obj, klen, BATCH_READS);
 
-        // read → per-thread vectors (gz path)
-        int ret;
-        do{
-            ret = kseq_read(seq);
-            if (ret >= 0){
-                char *buf = (char*)malloc(seq->seq.l + 1);
-                if (!buf) err(errno, "%s(): OOM read buf", __func__);
-                memcpy(buf, seq->seq.s, seq->seq.l);
-                buf[seq->seq.l] = '\0';
-                R[rcnt].s = buf; R[rcnt].l = (int)seq->seq.l;
-                ++rcnt;
+        // 2) finalize once (shared shrink + bucketed merge)
+        SortedKV_Arrays_t kv = finalize_vectors_bucketed(V_thr, nth, opt->p);
+
+        // 3) conflict filter + 4) write
+        if (kv.len){
+            if (!opt->conflict){
+                    if(opt->abundance) remove_ctx_with_conflict_obj(&kv, Bitslen.obj);
+                    else remove_ctx_with_conflict_obj_noabund (kv.keys, &(kv.len), Bitslen.obj);
             }
-            if (rcnt >= BATCH_READS || ret < 0){
-                #pragma omp parallel for if (nth>1) num_threads(opt->p) schedule(static)
-                for (int ri=0; ri<rcnt; ++ri){
-                    int tid = 0;
-                    #ifdef _OPENMP
-                    tid = omp_get_thread_num();
-                    #endif
-                    sketch_read_into_vec(R[ri].s, R[ri].l, &V_thr[tid],
-                                         ctxmask, tupmask, Bitslen.obj, klen);
-                }
-                for (int i=0;i<rcnt;++i) free(R[i].s);
-                rcnt=0;
-            }
-        } while (ret >= 0);
-        free(R);
-
-        // per-thread shrink: sort + counts
-        size_t pre_elems=0; for (int t=0;t<nth;++t) pre_elems += V_thr[t].n;
-        #pragma omp parallel for if (nth>1 && pre_elems >= (1u<<20)) num_threads(opt->p) schedule(dynamic)
-        for (int t=0; t<nth; ++t) shrink_thread_vec(&V_thr[t], &C_thr[t]);
-
-        size_t total_distinct=0; for (int t=0;t<nth;++t) total_distinct += V_thr[t].n;
-        if (total_distinct==0){
-            sketch_index[f+1]=0;
-            for (int t=0;t<nth;++t){ v_free(&V_thr[t]); free(C_thr[t]); }
-            free(V_thr); free(C_thr);
-            kseq_destroy(seq); gzclose(in);
-            fprintf(stderr, "\r%d/%d genomes processed", f+1, nfiles); fflush(stderr);
-            continue;
+            write_index_payload_and_free(comb, (opt->abundance?comb_ab:NULL),
+                                         opt->abundance, &sketch_index[f+1], &kv);
+        } else {
+            sketch_index[f+1] = 0;
         }
 
-        // buckets
-        const unsigned BITS = clamp_bucket_bits_from_total(total_distinct);
-        const size_t NB = (size_t)1u << BITS;
-
-        size_t *bucket_totals = (size_t*)calloc(NB, sizeof(size_t));
-        size_t **thr_counts   = (size_t**)malloc((size_t)nth * sizeof(size_t*));
-        if (!bucket_totals || !thr_counts) err(errno, "%s(): OOM bucket meta", __func__);
-        for (int t=0;t<nth;++t){
-            thr_counts[t] = (size_t*)calloc(NB, sizeof(size_t));
-            if (!thr_counts[t]) err(errno, "%s(): OOM thr_counts", __func__);
-        }
-
-        #pragma omp parallel for num_threads(opt->p) schedule(static)
-        for (int t=0; t<nth; ++t){
-            uint64_t *A = V_thr[t].a; size_t n = V_thr[t].n;
-            for (size_t i=0;i<n;++i){
-                unsigned b = (unsigned)(A[i] >> (64 - BITS));
-                ++thr_counts[t][b];
-            }
-        }
-
-        for (size_t b=0;b<NB;++b){
-            size_t sum=0; for (int t=0;t<nth;++t) sum += thr_counts[t][b];
-            bucket_totals[b] = sum;
-        }
-
-        size_t *bucket_off = (size_t*)malloc((NB+1)*sizeof(size_t));
-        if (!bucket_off) err(errno, "%s(): OOM bucket_off", __func__);
-        bucket_off[0]=0;
-        for (size_t b=0;b<NB;++b) bucket_off[b+1] = bucket_off[b] + bucket_totals[b];
-
-        const size_t TOTAL_ENTRIES = bucket_off[NB];
-        uint64_t *B_keys = (uint64_t*)malloc(TOTAL_ENTRIES*sizeof(uint64_t));
-        uint32_t *B_vals = (uint32_t*)malloc(TOTAL_ENTRIES*sizeof(uint32_t));
-        if (!B_keys || !B_vals) err(errno, "%s(): OOM bucket KV", __func__);
-
-        size_t **thr_write = (size_t**)malloc((size_t)nth * sizeof(size_t*));
-        if (!thr_write) err(errno, "%s(): OOM thr_write", __func__);
-        for (int t=0;t<nth;++t){
-            thr_write[t] = (size_t*)malloc(NB*sizeof(size_t));
-            if (!thr_write[t]) err(errno, "%s(): OOM thr_write[t]", __func__);
-        }
-        for (size_t b=0;b<NB;++b){
-            size_t off = bucket_off[b];
-            for (int t=0;t<nth;++t){ thr_write[t][b] = off; off += thr_counts[t][b]; }
-        }
-
-        #pragma omp parallel for num_threads(opt->p) schedule(static)
-        for (int t=0; t<nth; ++t){
-            uint64_t *Ak = V_thr[t].a; uint32_t *Av = C_thr[t]; size_t n = V_thr[t].n;
-            size_t *pos = thr_write[t];
-            for (size_t i=0;i<n;++i){
-                uint64_t k = Ak[i];
-                unsigned b = (unsigned)(k >> (64 - BITS));
-                size_t p = pos[b]++;
-                B_keys[p] = k;
-                B_vals[p] = Av ? Av[i] : 1u;
-            }
-        }
-
-        for (int t=0;t<nth;++t){ v_free(&V_thr[t]); free(C_thr[t]); free(thr_counts[t]); free(thr_write[t]); }
-        free(V_thr); free(C_thr); free(thr_counts); free(thr_write);
-
-        // per-bucket parallel KV sort+merge
-        uint64_t **bk_keys = (uint64_t**)malloc(NB*sizeof(uint64_t*));
-        uint32_t **bk_vals = (uint32_t**)malloc(NB*sizeof(uint32_t*));
-        size_t    *bk_len  = (size_t*)   malloc(NB*sizeof(size_t));
-        if (!bk_keys || !bk_vals || !bk_len) err(errno, "%s(): OOM bucket outs", __func__);
-
-        #pragma omp parallel for num_threads(opt->p) schedule(dynamic)
-        for (size_t b=0; b<NB; ++b){
-            const size_t begin = bucket_off[b], end = bucket_off[b+1];
-            const size_t n = end - begin;
-            if (!n){ bk_keys[b]=NULL; bk_vals[b]=NULL; bk_len[b]=0; continue; }
-            uint64_t *kseg = B_keys + begin; uint32_t *vseg = B_vals + begin;
-            radix_sort_kv_u64(kseg, vseg, n);
-            size_t m = shrink_kv_inplace_u64_u32(kseg, vseg, n);
-            uint64_t *ko = (uint64_t*)malloc(m*sizeof(uint64_t));
-            uint32_t *vo = (uint32_t*)malloc(m*sizeof(uint32_t));
-            if (!ko || !vo) err(errno, "%s(): OOM bucket kv out", __func__);
-            memcpy(ko, kseg, m*sizeof(uint64_t));
-            memcpy(vo, vseg, m*sizeof(uint32_t));
-            bk_keys[b]=ko; bk_vals[b]=vo; bk_len[b]=m;
-        }
-
-        free(B_keys); free(B_vals); free(bucket_totals);
-
-        size_t *out_off = (size_t*)malloc((NB+1)*sizeof(size_t));
-        if (!out_off) err(errno, "%s(): OOM out_off", __func__);
-        out_off[0]=0; for (size_t b=0;b<NB;++b) out_off[b+1] = out_off[b] + bk_len[b];
-        const size_t M = out_off[NB];
-
-        uint64_t *out_keys = (uint64_t*)malloc(M*sizeof(uint64_t));
-        uint32_t *out_vals = (uint32_t*)malloc(M*sizeof(uint32_t));
-        if (!out_keys || !out_vals) err(errno, "%s(): OOM final kv", __func__);
-
-        #pragma omp parallel for num_threads(opt->p) schedule(static)
-        for (size_t b=0; b<NB; ++b){
-            if (!bk_len[b]) continue;
-            memcpy(out_keys + out_off[b], bk_keys[b], bk_len[b]*sizeof(uint64_t));
-            memcpy(out_vals + out_off[b], bk_vals[b], bk_len[b]*sizeof(uint32_t));
-            free(bk_keys[b]); free(bk_vals[b]);
-        }
-        free(bk_keys); free(bk_vals); free(bk_len); free(bucket_off); free(out_off);
-
-        SortedKV_Arrays_t kv = (SortedKV_Arrays_t){ .keys=out_keys, .values=out_vals, .len=M };
-        apply_conflict_filter(&kv, /*has_abundance=*/true, opt->conflict, Bitslen.obj);
-        write_index_payload_and_free(comb, (opt->abundance?comb_ab:NULL), opt->abundance,
-                                     &sketch_index[f+1], &kv);
-
-        kseq_destroy(seq); gzclose(in);
-        fprintf(stderr, "\r%d/%d genomes processed", f+1, nfiles); fflush(stderr);
+        fprintf(stderr, "\r%d/%d genomes processed", f+1, nfiles);
+        fflush(stderr);
     }
 
     for (int i=0;i<nfiles;++i) sketch_index[i+1] += sketch_index[i];
