@@ -564,7 +564,7 @@ void read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val, infile_tab_t 
 }
 
 // for kssd3 ani use directly
-simple_sketch_t *simple_genomes2mem2sortedctxobj64_mem(infile_tab_t *infile_stat, int drfold)
+simple_sketch_t *old_simple_genomes2mem2sortedctxobj64_mem(infile_tab_t *infile_stat, int drfold)
 { // only for coden pattern sketching*
     FILTER = UINT32_MAX >> drfold;
     uint32_t len_mv = 2 * klen - 2;
@@ -968,7 +968,7 @@ static inline int has_suffix(const char *s, const char *suf) {
 // =====================================================
 
 // Single-vector collector for gz FASTQ
-static void load_fastq_gz_into_single_vec(const char *path, u64vec *vec, uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits,uint32_t klen)
+static inline void load_fastx_into_single_vec(char *path, u64vec *vec, uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits,uint32_t klen)
 {
     gzFile in = gzopen(path, "r");
     if (!in) err(errno, "%s(): Cannot open %s", __func__, path);
@@ -988,7 +988,7 @@ static void load_fastq_gz_into_single_vec(const char *path, u64vec *vec, uint64_
 }
 
 // Single-vector collector for plain FASTQ via mmap (no copies)
-static void load_fastq_plain_mmap_into_single_vec(const char *path, u64vec *vec, uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits, uint32_t klen)
+static inline void load_fastq_plain_mmap_into_single_vec(char *path, u64vec *vec, uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits, uint32_t klen)
 {
     int fd = open(path, O_RDONLY);
     if (fd < 0) err(errno, "%s(): open %s", __func__, path);
@@ -1030,10 +1030,13 @@ static void load_fastq_plain_mmap_into_single_vec(const char *path, u64vec *vec,
 }
 
 // Tiny wrapper to choose gz vs plain
-static inline void load_fastq_into_single_vec(const char *path,u64vec *vec,uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits,uint32_t klen)
+static inline void load_genome_into_single_vec(char *path,u64vec *vec,uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits,uint32_t klen)
 {
-    if (has_suffix(path, ".gz"))load_fastq_gz_into_single_vec(path, vec, ctxmask, tupmask, nobjbits, klen);
-    else load_fastq_plain_mmap_into_single_vec(path, vec, ctxmask, tupmask, nobjbits, klen);
+    if (isCompressfile(path) || isOK_fmt_infile(path, fasta_fmt, FAS_FMT_SZ))
+        load_fastx_into_single_vec(path, vec, ctxmask, tupmask, nobjbits, klen);
+    else if (isOK_fmt_infile(path, fastq_fmt, FQ_FMT_SZ))
+        load_fastq_plain_mmap_into_single_vec(path, vec, ctxmask, tupmask, nobjbits, klen);
+    else  err(errno, "%s(): %s is not accept format(.fasta,.fastq)",__func__, path);    
 }
 
 // =====================================================
@@ -1079,10 +1082,10 @@ static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, 
         #pragma omp parallel for num_threads(opt->p) schedule(dynamic, 1)
         for (int bi = 0; bi < this_batch; ++bi) {
             const int file_idx = batch_start + bi;
-            const char *fpath  = tab->organized_infile_tab[file_idx].fpath;
+            char *fpath  = tab->organized_infile_tab[file_idx].fpath;
 
             u64vec vec; v_init(&vec, 1u << 15);
-            load_fastq_into_single_vec(fpath, &vec, ctxmask, tupmask, Bitslen.obj, klen);
+            load_genome_into_single_vec(fpath, &vec, ctxmask, tupmask, Bitslen.obj, klen);
 
             if (vec.n) {
                 SortedKV_Arrays_t kv = build_kv_from_vec(&vec, has_abundance);
@@ -1477,4 +1480,92 @@ static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_t
     if (opt->abundance) fclose(comb_ab);
     free(sketch_index);
     write_sketch_stat(opt->outdir, tab);
+}
+
+// simple API for kssd3 ani use directly
+// Faster, memory-only, keys-only sketcher (vector + radix + dedup + conflict filter)
+// API kept identical to your original.
+
+simple_sketch_t *simple_genomes2mem2sortedctxobj64_mem(infile_tab_t *infile_stat, int drfold)
+{
+    // ---- 1) configure sketch filter (same semantics as your original) ----
+    FILTER = UINT32_MAX >> drfold;
+
+    const int nfiles = infile_stat->infile_num;
+    if (nfiles <= 0) {
+        simple_sketch_t *ret = (simple_sketch_t*)calloc(1, sizeof(simple_sketch_t));
+        if (!ret) err(EXIT_FAILURE, "%s(): OOM ret", __func__);
+        ret->comb_sketch = NULL;
+        ret->sketch_index = (uint64_t*)calloc(1, sizeof(uint64_t)); // [0] = 0
+        ret->infile_num = 0;
+        return ret;
+    }
+
+    // ---- 2) per-file outputs (keys only) ----
+    uint64_t **per_keys = (uint64_t**)calloc((size_t)nfiles, sizeof(uint64_t*));
+    uint64_t  *per_len  = (uint64_t*) calloc((size_t)nfiles, sizeof(uint64_t));
+    if (!per_keys || !per_len) err(EXIT_FAILURE, "%s(): OOM per-file arrays", __func__);
+
+    // ---- 3) parallel across files: load → vectorize (ctxobj) → sort → dedup → conflict-filter ----
+    // Set number of threads via OMP env or your build flags (-fopenmp)
+    #pragma omp parallel for schedule(dynamic,1) num_threads(nfiles)
+    for (int f = 0; f < nfiles; ++f) {
+        char *path = infile_stat->organized_infile_tab[f].fpath;
+
+        // Collect kept ctxobj keys into a single vector for this file
+        u64vec vec; v_init(&vec, 1u << 15); // heuristic starting capacity
+        load_genome_into_single_vec(path, &vec, ctxmask, tupmask, Bitslen.obj, klen);
+        if (vec.n == 0) {
+            per_keys[f] = NULL;
+            per_len[f]  = 0;
+            v_free(&vec);
+            continue;
+        }
+
+        // Sort + dedup (keys only)
+        radix_sort_u64(vec.a, vec.n);
+        vec.n = dedup_sorted_uint64(vec.a, vec.n);
+        // Conflict filter (no abundance version) — keeps array sorted, shrinks length in-place
+        remove_ctx_with_conflict_obj_noabund(vec.a, &vec.n, Bitslen.obj);
+
+        // Transfer ownership: shrink to exact size and hand out
+        uint64_t *outk = (uint64_t*)malloc(vec.n * sizeof(uint64_t));
+        if (!outk) err(EXIT_FAILURE, "%s(): OOM outk", __func__);
+        memcpy(outk, vec.a, vec.n * sizeof(uint64_t));
+        per_keys[f] = outk;
+        per_len[f]  = (uint64_t)vec.n;
+
+        v_free(&vec);
+    }
+
+    // ---- 4) prefix-sum index & concatenate all into one combined sketch buffer ----
+    uint64_t *sketch_index = (uint64_t*)calloc((size_t)nfiles + 1, sizeof(uint64_t));
+    if (!sketch_index) err(EXIT_FAILURE, "%s(): OOM sketch_index", __func__);
+
+    for (int i = 0; i < nfiles; ++i) sketch_index[i + 1] = sketch_index[i] + per_len[i];
+    const uint64_t total_keys = sketch_index[nfiles];
+
+    uint64_t *combined = NULL;
+    if (total_keys) {
+        combined = (uint64_t*)malloc((size_t)total_keys * sizeof(uint64_t));
+        if (!combined) err(EXIT_FAILURE, "%s(): OOM combined", __func__);
+
+        // copy each file's keys to its slot
+        for (int i = 0; i < nfiles; ++i) {
+            const uint64_t n = per_len[i];
+            if (!n) continue;
+            memcpy(combined + sketch_index[i], per_keys[i], (size_t)n * sizeof(uint64_t));
+            free(per_keys[i]); // done with this piece
+        }
+    }
+    free(per_keys);
+    free(per_len);
+
+    // ---- 5) build return object ----
+    simple_sketch_t *ret = (simple_sketch_t*)malloc(sizeof(simple_sketch_t));
+    if (!ret) err(EXIT_FAILURE, "%s(): OOM ret", __func__);
+    ret->comb_sketch = combined;      // length = total_keys (may be 0)
+    ret->sketch_index = sketch_index; // length = nfiles+1
+    ret->infile_num = nfiles;
+    return ret;
 }
