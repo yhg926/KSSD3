@@ -62,51 +62,13 @@ static inline uint64_t mix64(uint64_t x){
     return x ^ (x >> 31);
 };
 
-#define SKETCH_HASH(key) ({    \
-     (uint32_t) mix64(key); \
-})
+#define SKETCH_HASH(key) ({   (uint32_t) mix64(key); })
 
 static inline uint32_t GET_SKETCHING_ID(uint64_t v1, uint64_t v2, uint64_t v3 ,uint64_t v4 , uint64_t v5){
 	uint64_t test_num = 31415926;
 	return SKETCH_HASH(v1) ^ SKETCH_HASH(v2) ^ SKETCH_HASH(v3) ^ SKETCH_HASH(v4) ^ SKETCH_HASH(v5) ^ SKETCH_HASH(test_num) ; 	
 }
 
-
-// define khash type
-
-
-//test
-
-/*
-#include <immintrin.h> // for _pext_u64/_pdep_u64
-
-static inline int has_bmi2(void){
-#if defined(__x86_64__)
-    // Cheap cached CPUID check in your init code; shown schematically here.
-    return __builtin_cpu_supports("bmi2");
-#else
-    return 0;
-#endif
-}
-
-
-static inline uint64_t make_ctxobj(uint64_t unituple, uint64_t tupmask, uint64_t ctxmask, uint8_t nobjbits){
-#if defined(__x86_64__)
-    if (__builtin_cpu_supports("bmi2")) {
-        uint64_t ctx = _pext_u64(unituple, ctxmask);
-        uint64_t obj = _pext_u64(unituple, tupmask & ~ctxmask );
-        // Choose a stable layout; high=ctx, low=obj:
-        //make sure obj occupy lowest nobjbits bits 
-        return (ctx << nobjbits) | obj;
-        // return (ctx << nobjbits) | (obj & ((1ULL<<nobjbits)-1));
-    }
-#endif
-    // Fallback to your existing packer
-    return uint64kmer2generic_ctxobj(unituple);
-}
-
-//<-test
-*/
 
 // ----- make_ctxobj_fast.h ----------------------------------------------------
 #pragma once
@@ -176,5 +138,9 @@ void mfa2sortedctxobj64( sketch_opt_t * sketch_opt_val, infile_tab_t* infile_sta
 //void print_hash_table(khash_t(kmer_hash) *h);
 void write_sketch_stat (const char* outdir, infile_tab_t* infile_stat);
 simple_sketch_t* simple_genomes2mem2sortedctxobj64_mem (infile_tab_t *infile_stat, int drfold);
-void sketch_genomes_hybrid(sketch_opt_t *opt, infile_tab_t *tab, int batch_size);
+static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, int batch_size);
+static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_tab_t *tab, int BATCH_READS);
+
+
+
 #endif

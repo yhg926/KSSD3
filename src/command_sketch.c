@@ -34,17 +34,6 @@ uint32_t get_sketching_id(uint32_t hclen, uint32_t holen, uint32_t iolen, uint32
     return GET_SKETCHING_ID(hclen, holen, iolen, drfold, FILTER);
 }
 
-/*
-void public_vars_init(dim_sketch_stat_t* sketch_stat_raw){
-     FILTER = UINT32_MAX >> sketch_stat_raw->drfold  ;
-     sketch_stat_raw->hash_id  =  GET_SKETCHING_ID(sketch_stat_raw->hclen, sketch_stat_raw->holen, sketch_stat_raw->iolen, sketch_stat_raw->drfold , FILTER);
-     klen = 2*(sketch_stat_raw->hclen + sketch_stat_raw->holen) + sketch_stat_raw->iolen;
-     if ( klen > 32 || FILTER < 256) err(EINVAL,"compute_sketch(): klen (%d) or FILTER (%u) is out of range (klen <=32 and FILTER: 256..0xffffffff)",klen, FILTER);
-     comblco_stat_one = *sketch_stat_raw ;
-     printf("Sketching method hashid = %u\tklen=%u\n", comblco_stat_one.hash_id,kcomblco_stat_one.len);
-}
-*/
-
 void compute_sketch(sketch_opt_t *sketch_opt_val, infile_tab_t *infile_stat)
 {
     if (sketch_opt_val->split_mfa)
@@ -54,7 +43,13 @@ void compute_sketch(sketch_opt_t *sketch_opt_val, infile_tab_t *infile_stat)
     }
     // test_read_genomes2mem2sortedctxobj64(sketch_opt_val, infile_stat, 1000);
     // read_genomes2mem2sortedctxobj64(sketch_opt_val, infile_stat, 1000);
-    sketch_genomes_hybrid(sketch_opt_val, infile_stat, 1024);
+
+    // Decide mode based on #files vs. threads
+    if (infile_stat->infile_num >= sketch_opt_val->p)         // Mode-A: per-file parallel
+        sketch_many_files_in_parallel(sketch_opt_val, infile_stat, 1024);
+    else         // Mode-B: in-file parallel
+        sketch_few_files_with_intrafile_parallel(sketch_opt_val, infile_stat, 4096);
+
     return;
     // 20150724: i am not sure if below code is still needed, since we have read_genomes2mem2sortedctxobj64() to handle all cases
     // normal sketching mode
@@ -302,398 +297,6 @@ int seq2sortedsketch64(char *seqfname, char *outfname, bool abundance, int n)
     return kmer_ct; // sketch_size;
 }
 
-#include <x86intrin.h>
-#include <sys/mman.h>
-#include <fcntl.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#ifndef MAP_POPULATE
-#define MAP_POPULATE 0
-#endif
-#ifndef MAP_ANONYMOUS
-#define MAP_ANONYMOUS 0x20
-#endif
-#include <bits/mman-linux.h>
-
-#define CACHE_ALIGN __attribute__((aligned(64)))
-#define BATCH_SIZE (4 << 20) // 4MB批量处理
-#define SIMD_WIDTH 32        // AVX2处理32字节块
-#define KMER_BATCH 8         // 每个SIMD批次处理8个k-mer
-
-// 缓存对齐的内存块结构
-struct MemoryBlocks
-{
-    char seq_buffer[BATCH_SIZE] CACHE_ALIGN;
-    uint64_t sketch_buffer[(BATCH_SIZE / 32) * KMER_BATCH] CACHE_ALIGN;
-};
-
-// SIMD辅助函数：将ASCII字符转换为2-bit编码
-static inline __m256i simd_base_encode(__m256i input)
-{
-    // ASCII值处理：A(65)=00, C(67)=01, G(71)=10, T(84)=11
-    const __m256i mask = _mm256_set1_epi8(0x1F);  // 取低5位
-    const __m256i baseA = _mm256_set1_epi8(0x01); // A的掩码
-    const __m256i baseC = _mm256_set1_epi8(0x03); // C的掩码
-    const __m256i baseG = _mm256_set1_epi8(0x07); // G的掩码
-    const __m256i baseT = _mm256_set1_epi8(0x14); // T的掩码
-
-    __m256i masked = _mm256_and_si256(input, mask);
-    __m256i cmpA = _mm256_cmpeq_epi8(masked, baseA);
-    __m256i cmpC = _mm256_cmpeq_epi8(masked, baseC);
-    __m256i cmpG = _mm256_cmpeq_epi8(masked, baseG);
-    __m256i cmpT = _mm256_cmpeq_epi8(masked, baseT);
-
-    __m256i result = _mm256_set1_epi8(0xFF); // 默认无效
-    result = _mm256_blendv_epi8(result, _mm256_set1_epi8(0), cmpA);
-    result = _mm256_blendv_epi8(result, _mm256_set1_epi8(1), cmpC);
-    result = _mm256_blendv_epi8(result, _mm256_set1_epi8(2), cmpG);
-    result = _mm256_blendv_epi8(result, _mm256_set1_epi8(3), cmpT);
-    return result;
-}
-
-// 核心处理函数
-int opt_seq2sortedsketch64(char *seqfname, char *outfname, bool abundance, int n)
-{
-    // 初始化内存池
-    static struct MemoryBlocks *mem_pool = NULL;
-    if (!mem_pool)
-    {
-        mem_pool = mmap(NULL, sizeof(struct MemoryBlocks),
-                        PROT_READ | PROT_WRITE,
-                        MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE, -1, 0);
-    }
-
-    // 优化gzip读取配置
-    gzFile infile = gzopen(seqfname, "r");
-    gzbuffer(infile, 1 << 20); // 1MB解压缓冲区
-    kseq_t *seq = kseq_init(infile);
-
-    // 预分配内存（调整为预估最大值的2倍）
-    size_t max_sketch = (BATCH_SIZE / 32) * KMER_BATCH * 2; // 估算k-mer密度
-    Vector raw_sketch;
-    vector_init(&raw_sketch, sizeof(uint64_t));
-    vector_reserve(&raw_sketch, max_sketch);
-
-    uint64_t tuple = 0, crvstuple = 0;
-    const uint32_t len_mv = 2 * klen - 2;
-    const uint64_t ctxmask_local = ctxmask;
-    const uint64_t tupmask_local = tupmask;
-
-    // 批量读取处理循环
-    while (kseq_read(seq) >= 0)
-    {
-        const char *s = seq->seq.s;
-        const int seq_len = seq->seq.l;
-        if (seq_len < klen)
-            continue;
-
-        int pos = 0;
-        int base = 0;
-#ifdef __AVX2__
-        // SIMD处理32字节块
-        for (; pos + SIMD_WIDTH <= seq_len; pos += SIMD_WIDTH)
-        {
-            __m256i chunk = _mm256_loadu_si256((__m256i *)(s + pos));
-            __m256i bases = simd_base_encode(chunk);
-
-            // 检测无效碱基
-            __m256i invalid = _mm256_cmpeq_epi8(bases, _mm256_set1_epi8(0xFF));
-            if (!_mm256_testz_si256(invalid, invalid))
-            {
-                base = 0; // 存在无效碱基则重置
-                continue;
-            }
-
-            // 将向量转换为64位处理
-            uint64_t *base64 = (uint64_t *)&bases;
-            uint64_t current_tuple = tuple;
-            uint64_t current_crvstuple = crvstuple;
-
-            // 处理32字节中的每个碱基
-            for (int i = 0; i < 4; ++i)
-            { // 每个uint64_t包含8个碱基
-                uint64_t block = base64[i];
-                for (int j = 0; j < 8; ++j, block >>= 8)
-                {
-                    uint64_t b = block & 0xFF;
-                    current_tuple = (current_tuple << 2) | b;
-                    current_crvstuple = (current_crvstuple >> 2) | ((b ^ 3LLU) << len_mv);
-
-                    if (++base >= klen)
-                    {
-                        // 生成k-mer特征
-                        uint64_t mask_tuple = current_tuple & ctxmask_local;
-                        uint64_t mask_crvstuple = current_crvstuple & ctxmask_local;
-                        uint64_t unituple = (mask_tuple < mask_crvstuple) ? current_tuple : current_crvstuple;
-                        unituple = uint64kmer2generic_ctxobj(unituple);
-
-                        // 哈希过滤
-                        uint64_t unictx = unituple & ctxmask_local;
-                        if (SKETCH_HASH(unictx) <= FILTER)
-                        {
-                            if (raw_sketch.size >= max_sketch)
-                            {
-                                max_sketch *= 2;
-                                vector_reserve(&raw_sketch, max_sketch);
-                            }
-                            uint64_t *dst = (uint64_t *)raw_sketch.data + raw_sketch.size++;
-                            *dst = unituple & tupmask_local;
-                        }
-                    }
-                }
-            }
-            tuple = current_tuple;
-            crvstuple = current_crvstuple;
-        }
-#endif
-
-        // 标量处理剩余部分
-        for (; pos < seq_len; ++pos)
-        {
-            unsigned char c = s[pos];
-            if (Basemap[c] == DEFAULT)
-            {
-                base = 0;
-                tuple = 0;
-                crvstuple = 0;
-                continue;
-            }
-            uint64_t basenum = Basemap[c];
-            uint64_t new_tuple = (tuple << 2) | basenum;
-            uint64_t new_crvstuple = (crvstuple >> 2) | ((basenum ^ 3LLU) << len_mv);
-
-            // 预取优化
-            if ((pos & 0xF) == 0)
-            {
-                _mm_prefetch(s + pos + 64, _MM_HINT_T0);
-            }
-
-            if (++base >= klen)
-            {
-                uint64_t mask_tuple = new_tuple & ctxmask_local;
-                uint64_t mask_crvstuple = new_crvstuple & ctxmask_local;
-                uint64_t unictx, unituple;
-                if (mask_tuple < mask_crvstuple)
-                {
-                    unictx = mask_tuple;
-                    unituple = new_tuple;
-                }
-                else
-                {
-                    unictx = mask_crvstuple;
-                    unituple = new_crvstuple;
-                }
-                // uint64_t unituple = (mask_tuple < mask_crvstuple) ? new_tuple : new_crvstuple;
-                if (SKETCH_HASH(unictx) <= FILTER)
-                {
-                    if (raw_sketch.size >= max_sketch)
-                    {
-                        max_sketch *= 2;
-                        vector_reserve(&raw_sketch, max_sketch);
-                    }
-                    uint64_t *dst = (uint64_t *)raw_sketch.data + raw_sketch.size++;
-                    *dst = uint64kmer2generic_ctxobj(unituple);
-                }
-            }
-            tuple = new_tuple;
-            crvstuple = new_crvstuple;
-        }
-    }
-
-    gzclose(infile);
-    kseq_destroy(seq);
-
-    // 并行排序优化
-    uint64_t *mem_lco = raw_sketch.data;
-    const size_t sketch_size = raw_sketch.size;
-#pragma omp parallel
-    {
-#pragma omp single
-        qsort(mem_lco, sketch_size, sizeof(uint64_t), qsort_comparator_uint64);
-    }
-
-    // 去重与过滤
-    uint32_t *mem_ab = NULL;
-    size_t kmer_ct = dedup_with_counts(mem_lco, sketch_size, &mem_ab);
-    if (n > 1)
-    {
-        size_t write_pos = 0;
-        for (size_t read_pos = 0; read_pos < kmer_ct; ++read_pos)
-        {
-            if (mem_ab[read_pos] >= n)
-            {
-                mem_lco[write_pos] = mem_lco[read_pos];
-                mem_ab[write_pos] = mem_ab[read_pos];
-                ++write_pos;
-            }
-        }
-        kmer_ct = write_pos;
-    }
-
-    // 批量写入优化
-    FILE *out = fopen(outfname, "wb");
-    setvbuf(out, NULL, _IOFBF, 1 << 26); // 64MB写入缓冲区
-    fwrite(mem_lco, sizeof(uint64_t), kmer_ct, out);
-    fclose(out);
-
-    if (abundance)
-    {
-        FILE *ab_file = fopen(format_string("%s.a", outfname), "wb");
-        setvbuf(ab_file, NULL, _IOFBF, 1 << 26);
-        fwrite(mem_ab, sizeof(uint32_t), kmer_ct, ab_file);
-        fclose(ab_file);
-        free(mem_ab);
-    }
-    vector_free(&raw_sketch);
-    return kmer_ct;
-}
-
-// 新增预定义参数
-#define CACHE_LINE_SIZE 64
-#define GZ_BUFFER_SIZE (1 << 20)   // 1MB解压缓冲区
-#define INIT_SKETCH_SIZE (1 << 24) // 初始预分配16M元素
-#define BATCH_PROCESS_SIZE 1024    // 批量处理单位
-
-int opt2_seq2sortedsketch64(char *seqfname, char *outfname, bool abundance, int n)
-{ // no SIMD optimization
-    // 优化1：设置更大的gzip解压缓冲区
-    gzFile infile = gzopen(seqfname, "r");
-    if (!infile)
-        err(errno, "reads2sketch64(): Cannot open file %s", seqfname);
-    gzbuffer(infile, GZ_BUFFER_SIZE);
-
-    kseq_t *seq = kseq_init(infile);
-
-    // 优化2：预分配对齐内存
-    uint64_t *raw_sketch = aligned_alloc(CACHE_LINE_SIZE, INIT_SKETCH_SIZE * sizeof(uint64_t));
-    size_t sketch_capacity = INIT_SKETCH_SIZE;
-    size_t sketch_size = 0;
-
-    // 优化3：批量处理中间变量
-    uint64_t batch_sketch[BATCH_PROCESS_SIZE] __attribute__((aligned(CACHE_LINE_SIZE)));
-    size_t batch_count = 0;
-
-    uint64_t tuple = 0, crvstuple = 0;
-    const uint32_t len_mv = 2 * klen - 2;
-
-    // 优化4：提前计算常用掩码
-    const uint64_t ctxmask_local = ctxmask;
-    const uint64_t tupmask_local = tupmask;
-
-    while (kseq_read(seq) >= 0)
-    {
-        const char *s = seq->seq.s;
-        const int seq_len = seq->seq.l;
-        if (seq_len < klen)
-            continue;
-
-        // 优化5：循环展开与局部变量缓存
-        int base = 0;
-        uint64_t current_tuple = tuple;
-        uint64_t current_crvstuple = crvstuple;
-
-        for (int pos = 0; pos < seq_len; pos++)
-        {
-            const unsigned char c = (unsigned short)s[pos];
-            const uint64_t basenum = Basemap[c];
-
-            if (basenum == DEFAULT)
-            {
-                base = 0;
-                current_tuple = 0;
-                current_crvstuple = 0;
-                continue;
-            }
-
-            // 优化6：拆解依赖链
-            const uint64_t new_tuple = (current_tuple << 2) | basenum;
-            const uint64_t new_crvstuple = (current_crvstuple >> 2) |
-                                           ((basenum ^ 3LLU) << len_mv);
-
-            if (++base >= klen)
-            {
-                // 优化7：无分支条件选择
-                const uint64_t masked_tuple = new_tuple & ctxmask_local;
-                const uint64_t masked_crvstuple = new_crvstuple & ctxmask_local;
-                const uint64_t unituple = (masked_tuple < masked_crvstuple) ? new_tuple : new_crvstuple;
-
-                // 优化8：批量写入
-                batch_sketch[batch_count++] = uint64kmer2generic_ctxobj(unituple) & tupmask_local;
-
-                // 批量提交
-                if (batch_count == BATCH_PROCESS_SIZE)
-                {
-                    if (sketch_size + batch_count > sketch_capacity)
-                    {
-                        // 优化9：指数扩容策略
-                        sketch_capacity = (sketch_size + batch_count) * 2;
-                        raw_sketch = realloc(raw_sketch, sketch_capacity * sizeof(uint64_t));
-                    }
-                    memcpy(raw_sketch + sketch_size, batch_sketch,
-                           batch_count * sizeof(uint64_t));
-                    sketch_size += batch_count;
-                    batch_count = 0;
-                }
-            }
-
-            current_tuple = new_tuple;
-            current_crvstuple = new_crvstuple;
-        }
-
-        // 更新全局变量供下次循环使用
-        tuple = current_tuple;
-        crvstuple = current_crvstuple;
-    }
-    printf("OK0\n");
-    // 处理剩余批次
-    if (batch_count > 0)
-    {
-        if (sketch_size + batch_count > sketch_capacity)
-        {
-            sketch_capacity = sketch_size + batch_count;
-            raw_sketch = realloc(raw_sketch, sketch_capacity * sizeof(uint64_t));
-        }
-        memcpy(raw_sketch + sketch_size, batch_sketch,
-               batch_count * sizeof(uint64_t));
-        sketch_size += batch_count;
-    }
-    printf("OK1\n");
-    gzclose(infile);
-    kseq_destroy(seq);
-
-    // 排序与去重
-    qsort(raw_sketch, sketch_size, sizeof(uint64_t), qsort_comparator_uint64);
-    uint32_t *mem_ab = NULL;
-    const uint32_t unique_count = dedup_with_counts(raw_sketch, sketch_size, &mem_ab);
-    printf("OK2\n");
-    // 过滤低频k-mer
-    uint32_t final_count = unique_count;
-    if (n > 1)
-    {
-        final_count = 0;
-        for (uint32_t i = 0; i < unique_count; i++)
-        {
-            if (mem_ab[i] >= n)
-            {
-                raw_sketch[final_count] = raw_sketch[i];
-                mem_ab[final_count] = mem_ab[i];
-                final_count++;
-            }
-        }
-    }
-    printf("OK3\n");
-    // 输出处理
-    write_to_file(outfname, raw_sketch, final_count * sizeof(uint64_t));
-    if (abundance)
-    {
-        write_to_file(format_string("%s.a", outfname), mem_ab, final_count * sizeof(uint32_t));
-        free(mem_ab);
-    }
-
-    free(raw_sketch);
-    return final_count;
-}
 
 int merge_comblco(sketch_opt_t *sketch_opt_val)
 {
@@ -1240,124 +843,14 @@ void test_read_genomes2mem2sortedctxobj64(sketch_opt_t *sketch_opt_val, infile_t
     write_sketch_stat(sketch_opt_val->outdir, infile_stat);
 }
 
-//
-// Hybrid sketcher: per-genome parallel when many files; otherwise in-file parallel.
-// Requires your existing repo symbols/types/macros:
-// - sketch_opt_t, infile_tab_t, Bitslen.obj, klen, ctxmask, tupmask
-// - Basemap[], DEFAULT
-// - remove_ctx_with_conflict_obj(), gpt_sort_khash_u64()
-// - write_to_file(), write_sketch_stat(), format_string()
-// - combined_sketch_suffix, idx_sketch_suffix
-// - kseq.h / zlib, khash sort64: KHASH_MAP_INIT_INT64(sort64, uint32_t)
-// - err()
 
-// KSEQ_INIT(gzFile, gzread)
-// KHASH_MAP_INIT_INT64(sort64, uint32_t)
-//  Single hot-loop helper: sketches ONE read into map `h`.
-//  Marked inline so the compiler can inline in both callers.
+// === unified helpers + both modes (A and B) ===
+// ---- conflict filters provided by your code:
+// void remove_ctx_with_conflict_obj(SortedKV_Arrays_t *kv, uint32_t n_obj_bits);
+// void remove_ctx_with_conflict_obj_noabund(uint64_t *keys, size_t *len_io, uint32_t n_obj_bits);
 #include <omp.h>
-
+typedef struct{char *s; int l;} read_span_t;
 // ---- In-file parallel helpers (used only when #files < threads) ----
-typedef struct { char *s; int l;} read_span_t;
-
-static inline void sketch_read_into_map(const char *restrict s, int len,
-                                        khash_t(sort64) *restrict h,
-                                        uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits,
-                                        uint32_t klen)
-{
-    const uint32_t len_mv = (uint32_t)(2 * klen - 2);
-    if (len < (int)klen)
-        return;
-
-    uint64_t tuple = 0, crv = 0;
-    int base = 0;
-
-    for (int pos = 0; pos < len; ++pos)
-    {
-        const int bmap = Basemap[(unsigned char)s[pos]];
-        if (unlikely(bmap == DEFAULT))
-        {
-            base = 0;
-            tuple = 0;
-            crv = 0;
-            continue;
-        }
-
-        const uint64_t b2 = (uint64_t)bmap;
-        tuple = (tuple << 2) | b2;
-        crv = (crv >> 2) | ((b2 ^ 3ull) << len_mv);
-        if (unlikely(++base < (int)klen))
-            continue;
-
-        uint64_t unituple, unictx, t_ctx = (tuple & ctxmask), r_ctx = (crv & ctxmask);
-
-        if (t_ctx < r_ctx)
-        {
-            unituple = tuple & tupmask;
-            unictx = t_ctx;
-        }
-        else
-        {
-            unituple = crv & tupmask;
-            unictx = r_ctx;
-        }
-        if (SKETCH_HASH(unictx) > FILTER)
-            continue;
-
-        if (unlikely(SKETCH_HASH(unictx) > FILTER))
-            continue;
-        const uint64_t ctxobj = make_ctxobj(unituple, tupmask, ctxmask, nobjbits);
-        int ret;
-        khint_t k = kh_put(sort64, h, ctxobj, &ret);
-        if (ret)
-            kh_value(h, k) = 1;
-    }
-};
-
-static inline void free_batch(read_span_t *R, int n)
-{
-    for (int i = 0; i < n; ++i)
-        free(R[i].s);
-}
-
-// Process a batch of reads in parallel (fan-out across threads).
-static void process_batch_reads(read_span_t *R, int n, sketch_opt_t *opt, uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits, khash_t(sort64) * *H_shard, int nshard)
-{
-#pragma omp parallel for num_threads(opt->p) schedule(static)
-    for (int ri = 0; ri < n; ++ri)
-    {
-        khash_t(sort64) *h = H_shard[((uintptr_t)R[ri].s >> 4) & (nshard - 1)];
-        sketch_read_into_map(R[ri].s, R[ri].l, h, ctxmask, tupmask, nobjbits, klen);
-    }
-}
-
-// Merge shards into one map and sort with your fast sorter.
-static SortedKV_Arrays_t merge_shards_and_sort(khash_t(sort64) * *H_shard, int nshard)
-{
-    khash_t(sort64) *H = kh_init(sort64);
-    size_t tot = 0;
-    for (int s = 0; s < nshard; ++s)
-        tot += kh_size(H_shard[s]);
-    kh_resize(sort64, H, tot ? tot : 4);
-
-    for (int s = 0; s < nshard; ++s)
-    {
-        for (khiter_t it = kh_begin(H_shard[s]); it != kh_end(H_shard[s]); ++it)
-        {
-            if (!kh_exist(H_shard[s], it))
-                continue;
-            uint64_t key = kh_key(H_shard[s], it);
-            int ret;
-            khint_t k = kh_put(sort64, H, key, &ret);
-            if (ret)
-                kh_value(H, k) = 1;
-        }
-    }
-    SortedKV_Arrays_t out = gpt_sort_khash_u64(H);
-    kh_destroy(sort64, H);
-    return out;
-}
-
 // Hot loop: push kept ctxobj into a vector (no hashing)
 static inline void sketch_read_into_vec(const char *restrict s, int len, u64vec *restrict vec,
                                         uint64_t ctxmask, uint64_t tupmask, uint8_t nobjbits, uint32_t klen)
@@ -1382,16 +875,14 @@ static inline void sketch_read_into_vec(const char *restrict s, int len, u64vec 
         const uint64_t b2 = (uint64_t)bmap;
         tuple = (tuple << 2) | b2;
         crv = (crv >> 2) | ((b2 ^ 3ull) << len_mv);
-        if (unlikely(++base < (int)klen))
-            continue;
+        if (unlikely(++base < (int)klen)) continue;
 
         const uint64_t t_ctx = (tuple & ctxmask);
         const uint64_t r_ctx = (crv & ctxmask);
         const int use_fwd = (t_ctx < r_ctx);
         const uint64_t unictx = use_fwd ? t_ctx : r_ctx;
 
-        if (unlikely(SKETCH_HASH(unictx) > FILTER))
-            continue;
+        if (unlikely(SKETCH_HASH(unictx) > FILTER)) continue;
 
         const uint64_t unituple = (use_fwd ? tuple : crv) & tupmask;
         const uint64_t ctxobj = make_ctxobj(unituple, tupmask, ctxmask, nobjbits);
@@ -1402,15 +893,10 @@ static inline void sketch_read_into_vec(const char *restrict s, int len, u64vec 
 static inline void shrink_thread_vec(u64vec *vec, uint32_t **counts_out)
 {
     // vec->a contains keys; produce counts_out aligned to deduped keys
-    if (vec->n == 0)
-    {
-        *counts_out = NULL;
-        return;
-    }
+    if (vec->n == 0) { *counts_out = NULL; return;}
     if (vec->n == 1){ // fast path
         *counts_out = (uint32_t *)malloc(sizeof(uint32_t));
         if (*counts_out) (*counts_out)[0] = 1;
-        // vec->a already “sorted/unique” of length 1
         return;
     }
     radix_sort_u64(vec->a, vec->n);
@@ -1424,23 +910,84 @@ static inline void shrink_thread_vec(u64vec *vec, uint32_t **counts_out)
     }
 }
 
-// ---- Mode A: per-genome parallel (vector + radix + counts), one thread per file ----
+
+static inline SortedKV_Arrays_t build_kv_from_vec(u64vec *vec, bool has_abundance)
+{
+    SortedKV_Arrays_t kv = (SortedKV_Arrays_t){0};
+    if (vec->n == 0) return kv;
+
+    radix_sort_u64(vec->a, vec->n);
+
+    if (has_abundance) {
+        uint32_t *counts = NULL;
+        vec->n = dedup_with_counts(vec->a, vec->n, &counts);
+        if (!counts) {
+            counts = (uint32_t*)malloc(vec->n * sizeof(uint32_t));
+            if (!counts) return kv; // OOM; kv stays empty, caller handles
+            for (size_t i=0;i<vec->n;++i) counts[i] = 1u;
+        }
+        kv.keys   = (uint64_t*)malloc(vec->n * sizeof(uint64_t));
+        kv.values = (uint32_t*)malloc(vec->n * sizeof(uint32_t));
+        if (!kv.keys || !kv.values) { free(kv.keys); free(kv.values); free(counts); return (SortedKV_Arrays_t){0}; }
+        memcpy(kv.keys, vec->a, vec->n * sizeof(uint64_t));
+        memcpy(kv.values, counts, vec->n * sizeof(uint32_t));
+        kv.len = vec->n;
+        free(counts);
+    } else {
+        vec->n = dedup_sorted_uint64(vec->a, vec->n);
+        kv.keys = (uint64_t*)malloc(vec->n * sizeof(uint64_t));
+        if (!kv.keys) return (SortedKV_Arrays_t){0};
+        memcpy(kv.keys, vec->a, vec->n * sizeof(uint64_t));
+        kv.values = NULL;
+        kv.len    = vec->n;
+    }
+    return kv;
+}
+
+static inline void apply_conflict_filter(SortedKV_Arrays_t *kv,bool has_abundance,
+                                         bool conflict_flag,uint32_t nobjbits)
+{
+    if (conflict_flag || kv->len == 0) return;
+    if (has_abundance) {
+        remove_ctx_with_conflict_obj(kv, nobjbits);
+    } else {
+        remove_ctx_with_conflict_obj_noabund(kv->keys, &kv->len, nobjbits);
+    }
+}
+
+static inline void write_index_payload_and_free(FILE *comb,FILE *comb_ab,
+                bool has_abundance,uint64_t *sketch_index_slot, SortedKV_Arrays_t *kv)
+{
+    *sketch_index_slot = kv->len;
+    if (kv->len) {
+        fwrite(kv->keys,   sizeof(uint64_t), kv->len, comb);
+        if (has_abundance) fwrite(kv->values, sizeof(uint32_t), kv->len, comb_ab);
+    }
+    free(kv->keys);   kv->keys   = NULL;
+    free(kv->values); kv->values = NULL;
+    kv->len = 0;
+}
+
+// ---------------- Mode A: per-genome parallel (vector + radix + counts) ----------------
 static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, int batch_size)
 {
     const int nfiles = tab->infile_num;
-    bool has_abundance = opt->abundance;
+    const bool has_abundance = opt->abundance;
+
     FILE *comb = fopen(format_string("%s/%s", opt->outdir, combined_sketch_suffix), "wb");
     if (!comb) err(errno, "%s() open comb", __func__);
-    setvbuf(comb, NULL, _IOFBF, 8u<<20);
-    FILE *comb_ab; if(has_abundance) {
+    setvbuf(comb, NULL, _IOFBF, 8u << 20);
+
+    FILE *comb_ab = NULL;
+    if (has_abundance) {
         comb_ab = fopen(format_string("%s/%s", opt->outdir, combined_ab_suffix), "wb");
-        setvbuf(comb_ab, NULL, _IOFBF, 8u<<20);
+        if (!comb_ab) err(errno, "%s() open file error: %s/%s", __func__, opt->outdir, combined_ab_suffix);
+        setvbuf(comb_ab, NULL, _IOFBF, 8u << 20);
     }
 
     uint64_t *sketch_index = (uint64_t *)calloc((size_t)nfiles + 1, sizeof(uint64_t));
     if (!sketch_index) err(errno, "%s(): OOM index", __func__);
 
-    // Process in batches of files to cap memory if needed
     for (int batch_start = 0; batch_start < nfiles; batch_start += batch_size) {
         const int batch_end  = (batch_start + batch_size <= nfiles) ? (batch_start + batch_size) : nfiles;
         const int this_batch = batch_end - batch_start;
@@ -1448,64 +995,48 @@ static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, 
         uint64_t *lens = (uint64_t *)calloc((size_t)this_batch, sizeof(uint64_t));
         if (!lens) err(errno, "%s(): OOM lens", __func__);
 
-        // we’ll keep per-file keys arrays to write after processing
-        uint64_t **batch_keys = (uint64_t**)calloc((size_t)this_batch, sizeof(uint64_t*));
+        uint64_t **batch_keys = (uint64_t **)calloc((size_t)this_batch, sizeof(uint64_t *));
         if (!batch_keys) err(errno, "%s(): OOM batch_keys", __func__);
-        uint32_t **batch_vals; if(has_abundance) {
-            batch_vals = (uint32_t**)calloc((size_t)this_batch, sizeof(uint32_t*));
+
+        uint32_t **batch_vals = NULL;
+        if (has_abundance) {
+            batch_vals = (uint32_t **)calloc((size_t)this_batch, sizeof(uint32_t *));
             if (!batch_vals) err(errno, "%s(): OOM batch_vals", __func__);
         }
 
-        #pragma omp parallel for num_threads(opt->p) schedule(dynamic,1)
+        #pragma omp parallel for num_threads(opt->p) schedule(dynamic, 1)
         for (int bi = 0; bi < this_batch; ++bi) {
             const int file_idx = batch_start + bi;
             const char *fpath  = tab->organized_infile_tab[file_idx].fpath;
 
             gzFile infile = gzopen(fpath, "r");
             if (!infile) err(errno, "%s(): Cannot open %s", __func__, fpath);
-            (void)gzbuffer(infile, 4u<<20);
+            (void)gzbuffer(infile, 4u << 20);
 
             kseq_t *seq = kseq_init(infile);
             if (!seq) err(errno, "%s(): kseq_init %s", __func__, fpath);
 
-            // 1) collect kept ctxobj into a single vector for this file/thread
-            u64vec vec; v_init(&vec, 1u<<15);  // heuristic initial capacity
+            u64vec vec; v_init(&vec, 1u << 15);
             while (kseq_read(seq) >= 0) {
                 sketch_read_into_vec(seq->seq.s, (int)seq->seq.l,
                                      &vec, ctxmask, tupmask, Bitslen.obj, klen);
             }
 
             if (vec.n) {
-                // 2) sort + dedup with counts (keys-only vector -> counts array)
-                radix_sort_u64(vec.a, vec.n);
-                if(has_abundance) {
-                    uint32_t *outv = NULL;
-                    vec.n = dedup_with_counts(vec.a, vec.n, &outv);
-                    uint64_t *outk = (uint64_t*) malloc(vec.n * sizeof(uint64_t));
-                    if (!outk || !outv) err(errno, "%s(): OOM file kv", __func__);
-                    memcpy(outk, vec.a, vec.n * sizeof(uint64_t));
-                    SortedKV_Arrays_t lco_ab = (SortedKV_Arrays_t){.keys = outk, .values = outv, .len = vec.n};
-                    if (!opt->conflict) remove_ctx_with_conflict_obj(&lco_ab, Bitslen.obj);
-                    batch_keys[bi] = lco_ab.keys;
-                    batch_vals[bi] = lco_ab.values;
-                    lens[bi]       = lco_ab.len;
-                }
-                else{              
-                    vec.n = dedup_sorted_uint64(vec.a, vec.n);
-                    uint64_t *outk = (uint64_t*) malloc(vec.n * sizeof(uint64_t));
-                    if (!outk) err(errno, "%s(): OOM file kv", __func__);
-                    memcpy(outk, vec.a, vec.n * sizeof(uint64_t));
-                    if (!opt->conflict) remove_ctx_with_conflict_obj_noabund(outk,&(vec.n), Bitslen.obj);
-                    batch_keys[bi] = outk;
-                    lens[bi] = vec.n;
-                }
-            } else 
+                SortedKV_Arrays_t kv = build_kv_from_vec(&vec, has_abundance);
+                apply_conflict_filter(&kv, has_abundance, opt->conflict, Bitslen.obj);
+                batch_keys[bi] = kv.keys;
+                lens[bi]       = kv.len;
+                if (has_abundance) batch_vals[bi] = kv.values;
+                else               free(kv.values);
+            } else {
                 lens[bi] = 0;
-            
+            }
+
             v_free(&vec);
             kseq_destroy(seq);
             gzclose(infile);
-        } // end per-file loop
+        }
 
         // write batch in order
         for (int bi = 0; bi < this_batch; ++bi) {
@@ -1514,335 +1045,251 @@ static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, 
             if (lens[bi]) {
                 fwrite(batch_keys[bi], sizeof(uint64_t), lens[bi], comb);
                 free(batch_keys[bi]);
-                 if(has_abundance) {
+                if (has_abundance) {
                     fwrite(batch_vals[bi], sizeof(uint32_t), lens[bi], comb_ab);
                     free(batch_vals[bi]);
-                 }
+                }
             }
         }
+
         free_all(batch_keys,lens,NULL);
-        if(!batch_vals) free(batch_vals);
+        if (has_abundance) free(batch_vals);
+
         fprintf(stderr, "\r%d/%d genomes processed", batch_end, nfiles);
         fflush(stderr);
     }
 
     for (int i = 0; i < nfiles; ++i) sketch_index[i + 1] += sketch_index[i];
     write_to_file(format_string("%s/%s", opt->outdir, idx_sketch_suffix),
-                  sketch_index, (size_t)(nfiles + 1) * sizeof(sketch_index[0]));
+                  sketch_index, (size_t)(nfiles + 1) * sizeof(uint64_t));
     fclose(comb);
-    if(has_abundance) fclose(comb_ab);
+    if (has_abundance) fclose(comb_ab);
     free(sketch_index);
     write_sketch_stat(opt->outdir, tab);
 }
 
-
-// ---------- helpers used by Mode-B (vector + radix + RLE) ----------
-
-// Choose bucket bits ~ 16× threads, clamped to [8,14]
-static inline unsigned choose_bucket_bits(int nth)
-{
-    unsigned target = (unsigned)(nth < 1 ? 1 : nth) * 16u;
-    unsigned bits = 0, x = 1;
-    while (x < target && bits < 14)
-    {
-        x <<= 1;
-        ++bits;
-    }
-    if (bits < 8)
-        bits = 8;
-    return bits; // NB = 1<<bits
-}
-
-static inline size_t shrink_kv_inplace_u64_u32(uint64_t *k, uint32_t *v, size_t n)
-{
-    if (!n) return 0;
-    size_t w = 0;
-    for (size_t r = 1; r < n; ++r)
-    {
-        if (k[r] == k[w]) v[w] += v[r];
-        else {
-            ++w;
-            k[w] = k[r];
-            v[w] = v[r];
-        }
-    }
-    return w + 1;
-}
-
-
 // ---------------- Mode B: vector + bucketed parallel finalizer (with counts) ----------------
+static inline unsigned clamp_bucket_bits_from_total(size_t total_distinct){
+    // target ~4k entries per bucket; clamp BITS to [8..14]
+    size_t target_buckets = (total_distinct / 4096) ? (total_distinct / 4096) : 256;
+    unsigned BITS = 8;
+    while (((size_t)1 << BITS) < target_buckets && BITS < 14) ++BITS;
+    return BITS;
+}
+
+
+static inline size_t shrink_kv_inplace_u64_u32(uint64_t *k, uint32_t *v, size_t n){
+    if (!n) return 0;
+    size_t w=0;
+    for (size_t r=1; r<n; ++r){
+        if (k[r]==k[w]) v[w] += v[r];
+        else { ++w; k[w]=k[r]; v[w]=v[r]; }
+    }
+    return w+1;
+}
+
 static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_tab_t *tab, int BATCH_READS)
 {
     const int nfiles = tab->infile_num;
+    const bool has_abundance = true; // Mode-B keeps counts; we can still write only keys if desired
 
     FILE *comb = fopen(format_string("%s/%s", opt->outdir, combined_sketch_suffix), "wb");
-    if (!comb)
-        err(errno, "%s() open file error: %s/%s", __func__, opt->outdir, combined_sketch_suffix);
+    if (!comb) err(errno, "%s() open file error: %s/%s", __func__, opt->outdir, combined_sketch_suffix);
     setvbuf(comb, NULL, _IOFBF, 8u << 20);
 
-    uint64_t *sketch_index = (uint64_t *)calloc((size_t)nfiles + 1, sizeof(uint64_t));
-    if (!sketch_index)
-        err(errno, "%s(): OOM sketch_index", __func__);
+    FILE *comb_ab = NULL;
+    if (opt->abundance) {
+        comb_ab = fopen(format_string("%s/%s", opt->outdir, combined_ab_suffix), "wb");
+        if (!comb_ab) err(errno, "%s() open file error: %s/%s", __func__, opt->outdir, combined_ab_suffix);
+        setvbuf(comb_ab, NULL, _IOFBF, 8u<<20);
+    }
 
-    for (int f = 0; f < nfiles; ++f)
-    {
+    uint64_t *sketch_index = (uint64_t*)calloc((size_t)nfiles + 1, sizeof(uint64_t));
+    if (!sketch_index) err(errno, "%s(): OOM sketch_index", __func__);
+
+    for (int f=0; f<nfiles; ++f){
         const char *path = tab->organized_infile_tab[f].fpath;
         gzFile in = gzopen(path, "r");
-        if (!in)
-            err(errno, "%s(): Cannot open %s", __func__, path);
-        (void)gzbuffer(in, 4u << 20);
+        if (!in) err(errno, "%s(): Cannot open %s", __func__, path);
+        (void)gzbuffer(in, 4u<<20);
         kseq_t *seq = kseq_init(in);
 
-        read_span_t *R = (read_span_t *)malloc((size_t)BATCH_READS * sizeof(*R));
+        typedef struct { char *s; int l; } read_span_t;
+        read_span_t *R = (read_span_t*)malloc((size_t)BATCH_READS*sizeof(*R));
         if (!R) err(errno, "%s(): OOM batch reads", __func__);
-        int rcnt = 0;
+        int rcnt=0;
 
         const int nth = (opt->p > 0 ? opt->p : 1);
-        u64vec *V_thr = (u64vec *)malloc((size_t)nth * sizeof(u64vec));
+        u64vec *V_thr = (u64vec*)malloc((size_t)nth*sizeof(u64vec));
         if (!V_thr) err(errno, "%s(): OOM V_thr", __func__);
-        for (int t = 0; t < nth; ++t)
-            v_init(&V_thr[t], 1u << 15);
+        for (int t=0;t<nth;++t) v_init(&V_thr[t], 1u<<15);
 
-        // per-thread counts (created after dedup)
-        uint32_t **C_thr = (uint32_t **)calloc((size_t)nth, sizeof(uint32_t *));
+        uint32_t **C_thr = (uint32_t**)calloc((size_t)nth, sizeof(uint32_t*));
         if (!C_thr) err(errno, "%s(): OOM C_thr", __func__);
 
         // read → per-thread vectors
         int ret;
         do{
             ret = kseq_read(seq);
-            if (ret >= 0)
-            {
-                char *buf = (char *)malloc(seq->seq.l + 1);
+            if (ret >= 0){
+                char *buf = (char*)malloc(seq->seq.l + 1);
                 if (!buf) err(errno, "%s(): OOM read buf", __func__);
                 memcpy(buf, seq->seq.s, seq->seq.l);
                 buf[seq->seq.l] = '\0';
-                R[rcnt].s = buf;
-                R[rcnt].l = (int)seq->seq.l;
+                R[rcnt].s = buf; R[rcnt].l = (int)seq->seq.l;
                 ++rcnt;
             }
-            if (rcnt >= BATCH_READS || ret < 0)
-            {
-#pragma omp parallel for if (opt->p > 1) num_threads(opt->p) schedule(static)
-                for (int ri = 0; ri < rcnt; ++ri)
-                {
+            if (rcnt >= BATCH_READS || ret < 0){
+                #pragma omp parallel for if (nth>1) num_threads(opt->p) schedule(static)
+                for (int ri=0; ri<rcnt; ++ri){
                     int tid = 0;
-#ifdef _OPENMP
+                    #ifdef _OPENMP
                     tid = omp_get_thread_num();
-#endif
-                    sketch_read_into_vec(R[ri].s, R[ri].l, &V_thr[tid], ctxmask, tupmask, Bitslen.obj, klen);
+                    #endif
+                    sketch_read_into_vec(R[ri].s, R[ri].l, &V_thr[tid],
+                                         ctxmask, tupmask, Bitslen.obj, klen);
                 }
-                for (int i = 0; i < rcnt; ++i)
-                    free(R[i].s);
-                rcnt = 0;
+                for (int i=0;i<rcnt;++i) free(R[i].s);
+                rcnt=0;
             }
         } while (ret >= 0);
         free(R);
 
-        // --- Per-thread shrink: sort + dedup_with_counts (parallel when worth it) ---
-        size_t total_elems = 0;
-        for (int t = 0; t < nth; ++t) total_elems += V_thr[t].n;
+        // per-thread shrink: sort + counts
+        size_t pre_elems=0; for (int t=0;t<nth;++t) pre_elems += V_thr[t].n;
+        #pragma omp parallel for if (nth>1 && pre_elems >= (1u<<20)) num_threads(opt->p) schedule(dynamic)
+        for (int t=0; t<nth; ++t) shrink_thread_vec(&V_thr[t], &C_thr[t]);
 
-// Parallelize only if enough work; otherwise it runs serially
-#pragma omp parallel for if (nth > 1 && total_elems >= (1u << 20)) num_threads(opt->p) schedule(dynamic)
-        for (int t = 0; t < nth; ++t)
-        {
-            shrink_thread_vec(&V_thr[t], &C_thr[t]);
+        size_t total_distinct=0; for (int t=0;t<nth;++t) total_distinct += V_thr[t].n;
+        if (total_distinct==0){
+            sketch_index[f+1]=0;
+            for (int t=0;t<nth;++t){ v_free(&V_thr[t]); free(C_thr[t]); }
+            free(V_thr); free(C_thr);
+            kseq_destroy(seq); gzclose(in);
+            fprintf(stderr, "\r%d/%d genomes processed", f+1, nfiles); fflush(stderr);
+            continue;
         }
 
-        // ---------- bucketed parallel finalizer ----------
-        const unsigned BITS = choose_bucket_bits(nth);
+        // buckets
+        const unsigned BITS = clamp_bucket_bits_from_total(total_distinct);
         const size_t NB = (size_t)1u << BITS;
 
-        size_t *bucket_totals = (size_t *)calloc(NB, sizeof(size_t));
-        size_t **thr_counts = (size_t **)malloc((size_t)nth * sizeof(size_t *));
-        if (!bucket_totals || !thr_counts) err(errno, "%s(): OOM bucket metadata", __func__);
-        for (int t = 0; t < nth; ++t)
-        {
-            thr_counts[t] = (size_t *)calloc(NB, sizeof(size_t));
+        size_t *bucket_totals = (size_t*)calloc(NB, sizeof(size_t));
+        size_t **thr_counts   = (size_t**)malloc((size_t)nth * sizeof(size_t*));
+        if (!bucket_totals || !thr_counts) err(errno, "%s(): OOM bucket meta", __func__);
+        for (int t=0;t<nth;++t){
+            thr_counts[t] = (size_t*)calloc(NB, sizeof(size_t));
             if (!thr_counts[t]) err(errno, "%s(): OOM thr_counts", __func__);
         }
 
-// counts per thread per bucket (entries = deduped keys per thread)
-#pragma omp parallel for num_threads(opt->p) schedule(static)
-        for (int t = 0; t < nth; ++t)
-        {
-            uint64_t *A = V_thr[t].a;
-            size_t n = V_thr[t].n;
-            for (size_t i = 0; i < n; ++i)
-            {
+        #pragma omp parallel for num_threads(opt->p) schedule(static)
+        for (int t=0; t<nth; ++t){
+            uint64_t *A = V_thr[t].a; size_t n = V_thr[t].n;
+            for (size_t i=0;i<n;++i){
                 unsigned b = (unsigned)(A[i] >> (64 - BITS));
                 ++thr_counts[t][b];
             }
         }
 
-        for (size_t b = 0; b < NB; ++b)
-        {
-            size_t sum = 0;
-            for (int t = 0; t < nth; ++t)
-                sum += thr_counts[t][b];
+        for (size_t b=0;b<NB;++b){
+            size_t sum=0; for (int t=0;t<nth;++t) sum += thr_counts[t][b];
             bucket_totals[b] = sum;
         }
 
-        size_t *bucket_off = (size_t *)malloc((NB + 1) * sizeof(size_t));
+        size_t *bucket_off = (size_t*)malloc((NB+1)*sizeof(size_t));
         if (!bucket_off) err(errno, "%s(): OOM bucket_off", __func__);
-        bucket_off[0] = 0;
-        for (size_t b = 0; b < NB; ++b)
-            bucket_off[b + 1] = bucket_off[b] + bucket_totals[b];
-        const size_t TOTAL_ENTRIES = bucket_off[NB];
+        bucket_off[0]=0;
+        for (size_t b=0;b<NB;++b) bucket_off[b+1] = bucket_off[b] + bucket_totals[b];
 
-        uint64_t *B_keys = (uint64_t *)malloc(TOTAL_ENTRIES * sizeof(uint64_t));
-        uint32_t *B_vals = (uint32_t *)malloc(TOTAL_ENTRIES * sizeof(uint32_t));
+        const size_t TOTAL_ENTRIES = bucket_off[NB];
+        uint64_t *B_keys = (uint64_t*)malloc(TOTAL_ENTRIES*sizeof(uint64_t));
+        uint32_t *B_vals = (uint32_t*)malloc(TOTAL_ENTRIES*sizeof(uint32_t));
         if (!B_keys || !B_vals) err(errno, "%s(): OOM bucket KV", __func__);
 
-        size_t **thr_write = (size_t **)malloc((size_t)nth * sizeof(size_t *));
+        size_t **thr_write = (size_t**)malloc((size_t)nth * sizeof(size_t*));
         if (!thr_write) err(errno, "%s(): OOM thr_write", __func__);
-        for (int t = 0; t < nth; ++t)
-        {
-            thr_write[t] = (size_t *)malloc(NB * sizeof(size_t));
-            if (!thr_write[t])
-                err(errno, "%s(): OOM thr_write[t]", __func__);
+        for (int t=0;t<nth;++t){
+            thr_write[t] = (size_t*)malloc(NB*sizeof(size_t));
+            if (!thr_write[t]) err(errno, "%s(): OOM thr_write[t]", __func__);
         }
-        for (size_t b = 0; b < NB; ++b)
-        {
+        for (size_t b=0;b<NB;++b){
             size_t off = bucket_off[b];
-            for (int t = 0; t < nth; ++t)
-            {
-                thr_write[t][b] = off;
-                off += thr_counts[t][b];
-            }
+            for (int t=0;t<nth;++t){ thr_write[t][b] = off; off += thr_counts[t][b]; }
         }
 
-// scatter (keys + counts) into buckets
-#pragma omp parallel for num_threads(opt->p) schedule(static)
-        for (int t = 0; t < nth; ++t)
-        {
-            uint64_t *Ak = V_thr[t].a;
-            uint32_t *Av = C_thr[t];
-            size_t n = V_thr[t].n;
+        #pragma omp parallel for num_threads(opt->p) schedule(static)
+        for (int t=0; t<nth; ++t){
+            uint64_t *Ak = V_thr[t].a; uint32_t *Av = C_thr[t]; size_t n = V_thr[t].n;
             size_t *pos = thr_write[t];
-            for (size_t i = 0; i < n; ++i)
-            {
+            for (size_t i=0;i<n;++i){
                 uint64_t k = Ak[i];
                 unsigned b = (unsigned)(k >> (64 - BITS));
                 size_t p = pos[b]++;
                 B_keys[p] = k;
-                B_vals[p] = Av ? Av[i] : 1u; // Av can be NULL if malloc failed earlier
+                B_vals[p] = Av ? Av[i] : 1u;
             }
         }
-        // free per-thread data
-        for (int t = 0; t < nth; ++t)
-        {
-            v_free(&V_thr[t]);
-            free_all(C_thr[t],thr_counts[t],thr_write[t],NULL);
-        }
-        free_all(V_thr,C_thr,thr_counts,thr_write,NULL);
-    
-        // per-bucket parallel KV sort+merge (sum counts)
-        int64_t **bk_keys = (int64_t **)malloc(NB * sizeof(int64_t *));
-        int **bk_vals = (int **)malloc(NB * sizeof(int *));
-        size_t *bk_len = (size_t *)malloc(NB * sizeof(size_t));
-        if (!bk_keys || !bk_vals || !bk_len) err(errno, "%s(): OOM bucket outputs", __func__);
 
-#pragma omp parallel for num_threads(opt->p) schedule(dynamic)
-        for (size_t b = 0; b < NB; ++b)
-        {
-            const size_t begin = bucket_off[b];
-            const size_t end = bucket_off[b + 1];
+        for (int t=0;t<nth;++t){ v_free(&V_thr[t]); free(C_thr[t]); free(thr_counts[t]); free(thr_write[t]); }
+        free(V_thr); free(C_thr); free(thr_counts); free(thr_write);
+
+        // per-bucket parallel KV sort+merge
+        uint64_t **bk_keys = (uint64_t**)malloc(NB*sizeof(uint64_t*));
+        uint32_t **bk_vals = (uint32_t**)malloc(NB*sizeof(uint32_t*));
+        size_t    *bk_len  = (size_t*)   malloc(NB*sizeof(size_t));
+        if (!bk_keys || !bk_vals || !bk_len) err(errno, "%s(): OOM bucket outs", __func__);
+
+        #pragma omp parallel for num_threads(opt->p) schedule(dynamic)
+        for (size_t b=0; b<NB; ++b){
+            const size_t begin = bucket_off[b], end = bucket_off[b+1];
             const size_t n = end - begin;
-            if (!n)
-            {
-                bk_keys[b] = NULL;
-                bk_vals[b] = NULL;
-                bk_len[b] = 0;
-                continue;
-            }
-
-            uint64_t *kseg = B_keys + begin;
-            uint32_t *vseg = B_vals + begin;
+            if (!n){ bk_keys[b]=NULL; bk_vals[b]=NULL; bk_len[b]=0; continue; }
+            uint64_t *kseg = B_keys + begin; uint32_t *vseg = B_vals + begin;
             radix_sort_kv_u64(kseg, vseg, n);
             size_t m = shrink_kv_inplace_u64_u32(kseg, vseg, n);
-
-            int64_t *ko = (int64_t *)malloc(m * sizeof(int64_t));
-            int *vo = (int *)malloc(m * sizeof(int));
+            uint64_t *ko = (uint64_t*)malloc(m*sizeof(uint64_t));
+            uint32_t *vo = (uint32_t*)malloc(m*sizeof(uint32_t));
             if (!ko || !vo) err(errno, "%s(): OOM bucket kv out", __func__);
-            for (size_t i = 0; i < m; ++i)
-            {
-                ko[i] = (int64_t)kseg[i];
-                vo[i] = (int)vseg[i];
-            }
-
-            bk_keys[b] = ko;
-            bk_vals[b] = vo;
-            bk_len[b] = m;
+            memcpy(ko, kseg, m*sizeof(uint64_t));
+            memcpy(vo, vseg, m*sizeof(uint32_t));
+            bk_keys[b]=ko; bk_vals[b]=vo; bk_len[b]=m;
         }
 
-        free_all(B_keys,B_vals,bucket_totals,NULL);
-      
-        // stitch buckets
-        size_t *out_off = (size_t *)malloc((NB + 1) * sizeof(size_t));
+        free(B_keys); free(B_vals); free(bucket_totals);
+
+        size_t *out_off = (size_t*)malloc((NB+1)*sizeof(size_t));
         if (!out_off) err(errno, "%s(): OOM out_off", __func__);
-        out_off[0] = 0;
-        for (size_t b = 0; b < NB; ++b)
-            out_off[b + 1] = out_off[b] + bk_len[b];
+        out_off[0]=0; for (size_t b=0;b<NB;++b) out_off[b+1] = out_off[b] + bk_len[b];
         const size_t M = out_off[NB];
 
-        int64_t *out_keys = (int64_t *)malloc(M * sizeof(int64_t));
-        int *out_vals = (int *)malloc(M * sizeof(int));
-        if (!out_keys || !out_vals)
-            err(errno, "%s(): OOM final kv", __func__);
+        uint64_t *out_keys = (uint64_t*)malloc(M*sizeof(uint64_t));
+        uint32_t *out_vals = (uint32_t*)malloc(M*sizeof(uint32_t));
+        if (!out_keys || !out_vals) err(errno, "%s(): OOM final kv", __func__);
 
-#pragma omp parallel for num_threads(opt->p) schedule(static)
-        for (size_t b = 0; b < NB; ++b)
-        {
-            if (!bk_len[b])
-                continue;
-            memcpy(out_keys + out_off[b], bk_keys[b], bk_len[b] * sizeof(int64_t));
-            memcpy(out_vals + out_off[b], bk_vals[b], bk_len[b] * sizeof(int));
-            free_all(bk_keys[b],bk_vals[b],NULL );
+        #pragma omp parallel for num_threads(opt->p) schedule(static)
+        for (size_t b=0; b<NB; ++b){
+            if (!bk_len[b]) continue;
+            memcpy(out_keys + out_off[b], bk_keys[b], bk_len[b]*sizeof(uint64_t));
+            memcpy(out_vals + out_off[b], bk_vals[b], bk_len[b]*sizeof(uint32_t));
+            free(bk_keys[b]); free(bk_vals[b]);
         }
-        free_all(bk_keys,bk_vals,bk_len,bucket_off,out_off,NULL);
+        free(bk_keys); free(bk_vals); free(bk_len); free(bucket_off); free(out_off);
 
-        SortedKV_Arrays_t lco_ab = (SortedKV_Arrays_t){.keys = out_keys, .values = out_vals, .len = M};
+        SortedKV_Arrays_t kv = (SortedKV_Arrays_t){ .keys=out_keys, .values=out_vals, .len=M };
+        apply_conflict_filter(&kv, /*has_abundance=*/true, opt->conflict, Bitslen.obj);
+        write_index_payload_and_free(comb, (opt->abundance?comb_ab:NULL), opt->abundance,
+                                     &sketch_index[f+1], &kv);
 
-        if (!opt->conflict)
-            remove_ctx_with_conflict_obj(&lco_ab, Bitslen.obj);
-
-        sketch_index[f + 1] = lco_ab.len;
-        if (lco_ab.len)
-            fwrite(lco_ab.keys, sizeof(int64_t), lco_ab.len, comb);
-
-        free_all(lco_ab.keys,lco_ab.values,NULL);
-
-        kseq_destroy(seq);
-        gzclose(in);
-
-        fprintf(stderr, "\r%d/%d genomes processed", f + 1, nfiles);
-        fflush(stderr);
+        kseq_destroy(seq); gzclose(in);
+        fprintf(stderr, "\r%d/%d genomes processed", f+1, nfiles); fflush(stderr);
     }
 
-    for (int i = 0; i < nfiles; ++i)
-        sketch_index[i + 1] += sketch_index[i];
+    for (int i=0;i<nfiles;++i) sketch_index[i+1] += sketch_index[i];
     write_to_file(format_string("%s/%s", opt->outdir, idx_sketch_suffix),
-                  sketch_index, (size_t)(nfiles + 1) * sizeof(sketch_index[0]));
+                  sketch_index, (size_t)(nfiles + 1) * sizeof(uint64_t));
     fclose(comb);
+    if (opt->abundance) fclose(comb_ab);
     free(sketch_index);
     write_sketch_stat(opt->outdir, tab);
 }
 
-void sketch_genomes_hybrid(sketch_opt_t *opt, infile_tab_t *tab, int batch_size)
-{
-
-    // Decide mode based on #files vs. threads
-    if (tab->infile_num >= opt->p)
-    {
-        // Mode-A: per-file parallel
-        // sketch_many_files_with_perfile_parallel(opt, tab, batch_size);
-        sketch_many_files_in_parallel(opt, tab, batch_size);
-    }
-    else
-    {
-        // Mode-B: in-file parallel
-        sketch_few_files_with_intrafile_parallel(opt, tab, 65536);
-    }
-}
