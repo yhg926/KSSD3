@@ -1066,11 +1066,11 @@ unify_sketch_t *generic_sketch_parse(const char *qrydir)
     else if (file_exists_in_folder(qrydir, sketch_stat))
     {
         result->stat_type = 2;
-        result->conflict = result->stats.lco_stat_val.conflict ;
         result->mem_stat = read_from_file(test_get_fullpath(qrydir, sketch_stat), &file_size);
         memcpy(&result->stats.lco_stat_val, result->mem_stat, sizeof(dim_sketch_stat_t));
 
         result->hash_id = result->stats.lco_stat_val.hash_id;
+        result->conflict = result->stats.lco_stat_val.conflict ;
         result->infile_num = result->stats.lco_stat_val.infile_num;
         result->kmerlen = result->stats.lco_stat_val.klen;
         result->gname = (char (*)[PATHLEN])(result->mem_stat + sizeof(dim_sketch_stat_t));

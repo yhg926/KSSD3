@@ -548,7 +548,7 @@ void comb_sortedsketch64Xcomb_sortedsketch64_sorted_per_q(ani_opt_t *ani_opt)
             } else {
                 double dist = get_generic_dist_from_features(&f);
                 ani = 1.0 - dist;
-            }
+            } 
 
             ani_row_t *row = &rows[nrows++];
             row->rn  = rn;
