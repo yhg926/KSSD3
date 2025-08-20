@@ -77,7 +77,9 @@ sort_sketch_summary_t *summarize_ctxgidobj_arr(ctxgidobj_t *ctxgidobj_arr, uint6
 void free_sort_sketch_summary(sort_sketch_summary_t *sort_sketch_summary);
 // void sorted_ctxgidobj_arr2triangle (ctxgidobj_t* ctxgidobj_arr, sort_sketch_summary_t *sort_sketch_summary);
 void sorted_ctxgidobj_arrXcomb_sortedsketch64(unify_sketch_t *qry_result, ctxgidobj_t *ctxgidobj_arr, sort_sketch_summary_t *sort_sketch_summary);
-void comb_sortedsketch64Xcomb_sortedsketch64_sorted_per_q(ani_opt_t *ani_opt);
+//void comb_sortedsketch64Xcomb_sortedsketch64_sorted_per_q(ani_opt_t *ani_opt);
+void comb_sortedsketch64Xcomb_sortedsketch64_filter_only(ani_opt_t *ani_opt);
+
 void comb_sortedsketch64Xcomb_sortedsketch64(ani_opt_t *ani_opt);
 void simple_sortedsketch64Xcomb_sortedsketch64(simple_sketch_t *simple_sketch, infile_tab_t *genomes_infiletab, ani_opt_t *ani_opt);
 

@@ -251,7 +251,7 @@ int cmd_ani(struct argp_state *state)
 			}
 			else
 			{
-				comb_sortedsketch64Xcomb_sortedsketch64_sorted_per_q(&ani_opt);
+				comb_sortedsketch64Xcomb_sortedsketch64_filter_only(&ani_opt);
 				//comb_sortedsketch64Xcomb_sortedsketch64(&ani_opt);
 				return 1;
 			}
