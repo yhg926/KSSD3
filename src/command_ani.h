@@ -77,7 +77,7 @@ sort_sketch_summary_t *summarize_ctxgidobj_arr(ctxgidobj_t *ctxgidobj_arr, uint6
 void free_sort_sketch_summary(sort_sketch_summary_t *sort_sketch_summary);
 // void sorted_ctxgidobj_arr2triangle (ctxgidobj_t* ctxgidobj_arr, sort_sketch_summary_t *sort_sketch_summary);
 void sorted_ctxgidobj_arrXcomb_sortedsketch64(unify_sketch_t *qry_result, ctxgidobj_t *ctxgidobj_arr, sort_sketch_summary_t *sort_sketch_summary);
-// void comb_sortedsketch64Xcomb_sortedsketch64 ( unify_sketch_t* ref_result, unify_sketch_t* qry_result );
+void comb_sortedsketch64Xcomb_sortedsketch64_sorted_per_q(ani_opt_t *ani_opt);
 void comb_sortedsketch64Xcomb_sortedsketch64(ani_opt_t *ani_opt);
 void simple_sortedsketch64Xcomb_sortedsketch64(simple_sketch_t *simple_sketch, infile_tab_t *genomes_infiletab, ani_opt_t *ani_opt);
 
@@ -183,6 +183,63 @@ static inline void get_ani_features_from_two_sorted_ctxobj64(const uint64_t *a, 
 		}
 	}
 }
+// a: may contain multiple entries with the same context (ctx = x >> nobjbits)
+// b: conflict-free (at most one entry per context), both sorted ascending by full 64-bit key
+static inline void get_ani_features_ctx_min_over_conflicts_a_only(const uint64_t *a, size_t n,const uint64_t *b, size_t m, ani_features_t *ani_features)
+{
+    const uint8_t  nobjbits = Bitslen.obj;
+    const uint64_t objmask  = ((1ULL << nobjbits) - 1ULL);
+    memset(ani_features, 0, sizeof *ani_features);
+
+    size_t i = 0, j = 0;
+
+    while (i < n && j < m) {
+        // ---- Coalesce one run in a: same context, possibly many objects ----
+        const uint64_t ctxA = a[i] >> nobjbits;
+        size_t run_begin = i;
+        do { ++i; } while (i < n && (a[i] >> nobjbits) == ctxA);
+        const size_t run_end = i; // [run_begin, run_end)
+
+        // ---- Advance b until its context >= ctxA (b has at most one per ctx) ----
+        uint64_t ctxB;
+        while (j < m && (ctxB = (b[j] >> nobjbits)) < ctxA) ++j;
+        if (j >= m) break;
+
+        if (ctxB > ctxA) {
+            // ctxA not present in b; skip this a-run and continue
+            continue;
+        }
+
+        // ctxB == ctxA: compare b's single object with all objects in a-run,
+        // and take the minimal number of differing 2-bit sections.
+        const uint32_t objB = (uint32_t)(b[j] & objmask);
+
+        ani_features->XnY_ctx++;   // one intersection at the context level
+
+        int min_diff_sections = NUM_CODENS + 1;  // sentinel > max
+        for (size_t k = run_begin; k < run_end; ++k) {
+            const uint32_t objA = (uint32_t)(a[k] & objmask);
+            const uint32_t diff = objA ^ objB;
+            if (diff == 0) {           // perfect match for this context
+                min_diff_sections = 0;
+                break;                  // can't do better
+            }
+            const int d = dna_popcount(diff);  // counts non-zero 2-bit sections
+            if (d < min_diff_sections) min_diff_sections = d;
+        }
+
+        if (min_diff_sections > 0) {
+            ani_features->N_diff_obj++;
+            ani_features->N_diff_obj_section += min_diff_sections;
+            if (min_diff_sections > 1) {
+                ani_features->N_mut2_ctx++;
+            }
+        }
+        // move b past this context (only one entry per context in b)
+        ++j;
+    }
+}
+
 
 static int compare_idani_desc(const void *a, const void *b)
 {

@@ -24,11 +24,21 @@ KLIB_SRCS := $(SRCDIR)/command_ani.c \
 
 KLIB_OBJS := $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(KLIB_SRCS))
 
+# --- add: build klib sources that provide symbols like ksprintf ---
+KLIB_LIB_SRCS := klib/kstring.c
+KLIB_LIB_OBJS := $(patsubst klib/%.c,$(OBJDIR)/%.o,$(KLIB_LIB_SRCS))
+
+# compile rule for klib/*.c files
+$(OBJDIR)/%.o: klib/%.c
+	mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -Iklib -c $< -o $@
+# --- end add ---
+
 # generic source files (non-klib)
 GEN_SRCS := $(filter-out $(KLIB_SRCS),$(SRCS))
 GEN_OBJS := $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(GEN_SRCS))
 
-OBJS := $(GEN_OBJS) $(KLIB_OBJS)
+OBJS := $(GEN_OBJS) $(KLIB_OBJS) $(KLIB_LIB_OBJS)
 
 $(TARGET): $(OBJS)
 	mkdir -p $(BINDIR)

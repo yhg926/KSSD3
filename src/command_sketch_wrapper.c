@@ -302,6 +302,7 @@ int cmd_sketch(struct argp_state *state)
       { /*initilize the rest comblco_stat_one member*/
         comblco_stat_one.hash_id = hash_id;
         comblco_stat_one.koc = sketch_opt.abundance;
+        comblco_stat_one.conflict = sketch_opt.conflict;
         comblco_stat_one.klen = klen;     
         comblco_stat_one.drfold = sketch_opt.drfold;
         comblco_stat_one.infile_num = infile_stat->infile_num;

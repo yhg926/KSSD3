@@ -1020,6 +1020,7 @@ unify_sketch_t *generic_sketch_parse(const char *qrydir)
     if (file_exists_in_folder(qrydir, co_dstat))
     {
         result->stat_type = 1;
+        result->conflict = 0;
         result->mem_stat = read_from_file(test_get_fullpath(qrydir, co_dstat), &file_size);
         memcpy(&result->stats.co_stat_val, result->mem_stat, sizeof(co_dstat_t));
         if (result->stats.co_stat_val.comp_num > 1)
@@ -1065,6 +1066,7 @@ unify_sketch_t *generic_sketch_parse(const char *qrydir)
     else if (file_exists_in_folder(qrydir, sketch_stat))
     {
         result->stat_type = 2;
+        result->conflict = result->stats.lco_stat_val.conflict ;
         result->mem_stat = read_from_file(test_get_fullpath(qrydir, sketch_stat), &file_size);
         memcpy(&result->stats.lco_stat_val, result->mem_stat, sizeof(dim_sketch_stat_t));
 

@@ -138,6 +138,7 @@ typedef struct dim_sketch_stat
 {
   uint32_t hash_id; // sketching type coding
   bool koc;
+  bool conflict; // with conflict objs ? 
   int coden_len; // Num of coden in the coden ctxobj pattern
   int klen;      // full length of kmer, 8..31
   int hclen;     // half context length,
@@ -387,6 +388,7 @@ typedef struct
   int infile_num;   // Number of input files
   int kmerlen;      // K-mer length
   uint32_t hash_id; // hash_id or shuf_id
+  bool conflict; //if keep conflict obj
   union
   {
     co_dstat_t co_stat_val;         // 32-bit sketch statistics

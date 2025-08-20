@@ -17,6 +17,7 @@
 #include <omp.h>
 #include <stdatomic.h>
 #include <ctype.h>
+#include "../klib/kstring.h"   // from klib
 #include "../klib/khash.h"
 // #include "../klib/khashl.h"
 #define GID_NBITS 20 // 2^20, 1M
@@ -476,6 +477,122 @@ void sorted_ctxgidobj_arrXcomb_sortedsketch64(unify_sketch_t *qry_result, ctxgid
 //...
 */
 
+
+typedef struct {
+    uint32_t rn;
+    double   ani;       // final ANI (set to 0 if fails cutoff)
+    double   af_qry;
+    double   af_ref;
+    int      XnY_ctx;
+    int      N_diff_obj;
+    int      N_diff_obj_section;
+    int      N_mut2_ctx;
+} ani_row_t;
+
+static int cmp_ani_desc(const void *pa, const void *pb) {
+    const ani_row_t *a = (const ani_row_t*)pa;
+    const ani_row_t *b = (const ani_row_t*)pb;
+    /* Sort by ANI descending; tie-breaker: higher af_qry, then lower rn for stability */
+    if (a->ani < b->ani) return  1;
+    if (a->ani > b->ani) return -1;
+    if (a->af_qry < b->af_qry) return  1;
+    if (a->af_qry > b->af_qry) return -1;
+    return (a->rn > b->rn) - (a->rn < b->rn);
+}
+
+void comb_sortedsketch64Xcomb_sortedsketch64_sorted_per_q(ani_opt_t *ani_opt)
+{
+    unify_sketch_t *qry = generic_sketch_parse(ani_opt->qrydir);
+    unify_sketch_t *ref = generic_sketch_parse(ani_opt->refdir);
+	if(ref->conflict) err(EXIT_FAILURE, "%s(): ref sketch contain conflict objs is not allowed",__func__);
+
+    const uint32_t Q = qry->infile_num;
+    const uint32_t R = ref->infile_num;
+
+    FILE *outfp = ani_opt->outf[0] == '\0' ? stdout : fopen(ani_opt->outf, "w");
+    if (!outfp) { perror("fopen"); return; }
+
+    // Header once
+    fprintf(outfp, "%s\n", print_header);
+
+    // One buffer per qn (no locking needed; each index written by only one thread)
+    kstring_t *out = (kstring_t*)calloc(Q, sizeof(kstring_t));
+    if (!out) { perror("calloc"); if (outfp!=stdout) fclose(outfp); return; }
+
+    // Parallelize over qn
+    #pragma omp parallel for schedule(dynamic) num_threads(ani_opt->p)
+    for (uint32_t qn = 0; qn < Q; ++qn) {
+        // Prepare query sketch
+        uint64_t *arr_qry = qry->comb_sketch + qry->sketch_index[qn];
+        size_t    len_qry = qry->sketch_index[qn + 1] - qry->sketch_index[qn];
+
+        // Local vector for all rn results
+        ani_row_t *rows = (ani_row_t*)malloc((size_t)R * sizeof(ani_row_t));
+        if (!rows) continue; // low-memory fallback: skip qn
+
+        uint32_t nrows = 0;
+
+        for (uint32_t rn = 0; rn < R; ++rn) {
+            uint64_t *arr_ref = ref->comb_sketch + ref->sketch_index[rn];
+            size_t    len_ref = ref->sketch_index[rn + 1] - ref->sketch_index[rn];
+
+            ani_features_t f;
+            get_ani_features_ctx_min_over_conflicts_a_only (arr_qry, len_qry,arr_ref, len_ref, &f);
+
+            double af_qry = (double)f.XnY_ctx / (double)len_qry;
+            double af_ref = (double)f.XnY_ctx / (double)len_ref;
+
+            double ani;
+            if (af_qry < ani_opt->afcut || af_ref < ani_opt->afcut) {
+                ani = 0.0;  // per your rule
+            } else {
+                double dist = get_generic_dist_from_features(&f);
+                ani = 1.0 - dist;
+            }
+
+            ani_row_t *row = &rows[nrows++];
+            row->rn  = rn;
+            row->ani = ani;
+            row->af_qry = af_qry;
+            row->af_ref = af_ref;
+            row->XnY_ctx = f.XnY_ctx;
+            row->N_diff_obj = f.N_diff_obj;
+            row->N_diff_obj_section = f.N_diff_obj_section;
+            row->N_mut2_ctx = f.N_mut2_ctx;
+        }
+
+        // Sort descending by ANI (ties by af_qry, then rn)
+        qsort(rows, nrows, sizeof(rows[0]), cmp_ani_desc);
+
+        // Format into this qn's buffer (grouped by qn, rn sorted inside)
+        kstring_t *ks = &out[qn];
+        ks->l = 0; // ensure clean
+        for (uint32_t i = 0; i < nrows; ++i) {
+            uint32_t rn = rows[i].rn;
+            ksprintf(ks, "%s\t%s\t%d\t%f\t%f\t%d\t%d\t%d\t%lf\n",
+                     ref->gname[rn], qry->gname[qn],
+                     rows[i].XnY_ctx,
+                     rows[i].af_qry,
+                     rows[i].af_ref,
+                     rows[i].N_diff_obj,
+                     rows[i].N_diff_obj_section,
+                     rows[i].N_mut2_ctx,
+                     rows[i].ani);
+        }
+
+        free(rows);
+    }
+
+    // Print in qn order for deterministic output
+    for (uint32_t qn = 0; qn < Q; ++qn) {
+        if (out[qn].l) fwrite(out[qn].s, 1, out[qn].l, outfp);
+        free(out[qn].s);
+    }
+    free(out);
+
+    if (outfp != stdout) fclose(outfp);
+}
+
 void comb_sortedsketch64Xcomb_sortedsketch64(ani_opt_t *ani_opt)
 {
 	unify_sketch_t *qry_result = generic_sketch_parse(ani_opt->qrydir);
@@ -504,7 +621,7 @@ void comb_sortedsketch64Xcomb_sortedsketch64(ani_opt_t *ani_opt)
 			ani_features_t ani_features;
 			uint64_t *arr_qry = qry_result->comb_sketch + qry_result->sketch_index[qn];
 			size_t len_qry = qry_result->sketch_index[qn + 1] - qry_result->sketch_index[qn];
-			get_ani_features_from_two_sorted_ctxobj64(arr_ref, len_ref, arr_qry, len_qry, &ani_features);
+			get_ani_features_ctx_min_over_conflicts_a_only(arr_ref, len_ref, arr_qry, len_qry, &ani_features);
 			double af_qry = (double)ani_features.XnY_ctx / len_qry;
 			double af_ref = (double)ani_features.XnY_ctx / len_ref;
 

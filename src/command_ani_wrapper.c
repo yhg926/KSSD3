@@ -249,7 +249,8 @@ int cmd_ani(struct argp_state *state)
 			}
 			else
 			{
-				comb_sortedsketch64Xcomb_sortedsketch64(&ani_opt);
+				comb_sortedsketch64Xcomb_sortedsketch64_sorted_per_q(&ani_opt);
+				//comb_sortedsketch64Xcomb_sortedsketch64(&ani_opt);
 				return 1;
 			}
 			// else err(EXIT_FAILURE, "%s(): Failed to detect index file '%s/%s'\nrun kssd3 sketch -i <sketch_folder> to create one", __func__, ani_opt.refdir, sorted_comb_ctxgid64obj32);
