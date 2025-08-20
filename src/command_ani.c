@@ -495,7 +495,7 @@ static inline int compute_line_if_pass(    const unify_sketch_t *qry, const unif
     double af_r = (double)f.XnY_ctx / (double)len_ref;
 
     /* apply af cut (sets ani=0 if fail) */
-    if (af_q < opt->afcut || af_r < opt->afcut) return 0;
+    if (af_r < opt->afcut) return 0;
 
     double dist = get_generic_dist_from_features(&f);
     double ani  = 1.0 - dist;
