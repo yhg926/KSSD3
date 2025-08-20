@@ -477,160 +477,151 @@ void sorted_ctxgidobj_arrXcomb_sortedsketch64(unify_sketch_t *qry_result, ctxgid
 //...
 */
 
-typedef struct
-{
-	uint32_t rn;
-	double ani;
-	double af_qry, af_ref;
-	int XnY_ctx, N_diff_obj, N_diff_obj_section, N_mut2_ctx;
+
+typedef struct {
+    uint32_t rn;
+    double   ani;          /* 0 if below cutoffs */
+    double   af_qry, af_ref;
+    int      XnY_ctx, N_diff_obj, N_diff_obj_section, N_mut2_ctx;
 } ani_row_t;
 
-static int cmp_ani_desc(const void *pa, const void *pb)
-{
-	const ani_row_t *a = (const ani_row_t *)pa;
-	const ani_row_t *b = (const ani_row_t *)pb;
-	if (a->ani < b->ani)
-		return 1;
-	if (a->ani > b->ani)
-		return -1;
-	if (a->af_qry < b->af_qry)
-		return 1;
-	if (a->af_qry > b->af_qry)
-		return -1;
-	return (a->rn > b->rn) - (a->rn < b->rn);
+static int cmp_ani_desc(const void *pa, const void *pb) {
+    const ani_row_t *a = (const ani_row_t*)pa;
+    const ani_row_t *b = (const ani_row_t*)pb;
+    if (a->ani < b->ani) return  1;
+    if (a->ani > b->ani) return -1;
+    if (a->af_qry < b->af_qry) return  1;
+    if (a->af_qry > b->af_qry) return -1;
+    return (a->rn > b->rn) - (a->rn < b->rn);
 }
 
-/* --- Core: compute one row (qn,rn) into rows[rn] --- */
+/* Compute one (qn,rn) row into rows[rn]. Only 'a' (query) may have conflicts; 'b' (ref) is conflict-free. */
 static inline void compute_row_for_qr(
-	const unify_sketch_t *qry, const unify_sketch_t *ref,
-	uint32_t qn, uint32_t rn, const ani_opt_t *opt,
-	ani_row_t *rows)
+    const unify_sketch_t *qry, const unify_sketch_t *ref,
+    uint32_t qn, uint32_t rn, const ani_opt_t *opt,
+    ani_row_t *rows)
 {
-	uint64_t *arr_qry = qry->comb_sketch + qry->sketch_index[qn];
-	size_t len_qry = qry->sketch_index[qn + 1] - qry->sketch_index[qn];
+    uint64_t *arr_qry = qry->comb_sketch + qry->sketch_index[qn];
+    size_t    len_qry = qry->sketch_index[qn + 1] - qry->sketch_index[qn];
 
-	uint64_t *arr_ref = ref->comb_sketch + ref->sketch_index[rn];
-	size_t len_ref = ref->sketch_index[rn + 1] - ref->sketch_index[rn];
+    uint64_t *arr_ref = ref->comb_sketch + ref->sketch_index[rn];
+    size_t    len_ref = ref->sketch_index[rn + 1] - ref->sketch_index[rn];
 
-	ani_features_t f;
-	/* Only 'a' (query) may have conflicts; 'b' (ref) must be conflict-free */
-	get_ani_features_ctx_min_over_conflicts_a_only(arr_qry, len_qry, arr_ref, len_ref, &f);
+    ani_features_t f;
+    get_ani_features_ctx_min_over_conflicts_a_only(arr_qry, len_qry, arr_ref, len_ref, &f);
 
-	double af_q = (double)f.XnY_ctx / (double)len_qry;
-	double af_r = (double)f.XnY_ctx / (double)len_ref;
+    const double af_q = (double)f.XnY_ctx / (double)len_qry;
+    const double af_r = (double)f.XnY_ctx / (double)len_ref;
 
-	double ani = 0.0;
-	if (!(af_q < opt->afcut || af_r < opt->afcut))
-	{
-		double dist = get_generic_dist_from_features(&f);
-		ani = 1.0 - dist;
-	}
+    double ani = 0.0;
+    if (!(af_q < opt->afcut || af_r < opt->afcut)) {
+        const double dist = get_generic_dist_from_features(&f);
+        ani = 1.0 - dist;
+    }
 
-	ani_row_t *row = &rows[rn];
-	row->rn = rn;
-	row->ani = ani;
-	row->af_qry = af_q;
-	row->af_ref = af_r;
-	row->XnY_ctx = f.XnY_ctx;
-	row->N_diff_obj = f.N_diff_obj;
-	row->N_diff_obj_section = f.N_diff_obj_section;
-	row->N_mut2_ctx = f.N_mut2_ctx;
+    ani_row_t *row = &rows[rn];
+    row->rn  = rn;
+    row->ani = ani;
+    row->af_qry = af_q;
+    row->af_ref = af_r;
+    row->XnY_ctx = f.XnY_ctx;
+    row->N_diff_obj = f.N_diff_obj;
+    row->N_diff_obj_section = f.N_diff_obj_section;
+    row->N_mut2_ctx = f.N_mut2_ctx;
 }
 
-/* --- Main: one parallel region with tasks+taskloop --- */
 void comb_sortedsketch64Xcomb_sortedsketch64_sorted_per_q(ani_opt_t *ani_opt)
 {
-	unify_sketch_t *qry = generic_sketch_parse(ani_opt->qrydir);
-	unify_sketch_t *ref = generic_sketch_parse(ani_opt->refdir);
-	if (ref->conflict)
-		errx(EXIT_FAILURE, "%s(): ref '%s' contains conflicting objects!", __func__, ani_opt->refdir);
+    unify_sketch_t *qry = generic_sketch_parse(ani_opt->qrydir);
+    unify_sketch_t *ref = generic_sketch_parse(ani_opt->refdir);
+    if (ref->conflict)
+        errx(EXIT_FAILURE, "%s(): ref '%s' contains conflicting objects!", __func__, ani_opt->refdir);
 
-	const uint32_t Q = qry->infile_num;
-	const uint32_t R = ref->infile_num;
+    const uint32_t Q = qry->infile_num;
+    const uint32_t R = ref->infile_num;
 
-	FILE *outfp = (ani_opt->outf[0] == '\0') ? stdout : fopen(ani_opt->outf, "w");
-	if (!outfp)
-	{
-		perror("fopen");
-		return;
-	}
-	fprintf(outfp, "%s\n", print_header);
+    FILE *outfp = (ani_opt->outf[0] == '\0') ? stdout : fopen(ani_opt->outf, "w");
+    if (!outfp) { perror("fopen"); return; }
+    fprintf(outfp, "%s\n", print_header);
 
-	kstring_t *out = (kstring_t *)calloc(Q, sizeof(kstring_t));
-	if (!out)
-	{
-		perror("calloc out");
-		if (outfp != stdout)
-			fclose(outfp);
-		return;
-	}
+    const int P = (ani_opt->p > 0) ? ani_opt->p : 1;
 
-	int P = (ani_opt->p > 0) ? ani_opt->p : 1;
+    /* Ordered printing ticket (remove for unordered printing). */
+    _Atomic uint32_t next_qn = 0;
+    /* #define PRINT_UNORDERED 1 */
 
-#pragma omp parallel num_threads(P)
-	{
-#pragma omp single nowait
-		for (uint32_t qn = 0; qn < Q; ++qn)
-		{
-			/* One task per query */
-#pragma omp task firstprivate(qn) shared(out, qry, ref, ani_opt)
-			{
-				ani_row_t *rows = (ani_row_t *)malloc((size_t)R * sizeof(ani_row_t));
-				if (!rows)
-				{
-					/* leave out[qn] empty */
-				}
-				else
-				{
-					/* Fan out rn-work into many tasks (no taskloop needed) */
-					const uint32_t CHUNK = 256; // tune: 64–1024
-					uint32_t start;
+    #pragma omp parallel num_threads(P)
+    {
+        #pragma omp single nowait
+        {
+            const int many_queries = (Q >= (uint32_t)P);
 
-#pragma omp taskgroup // wait for rn-chunks before sort
-					for (start = 0; start < R; start += CHUNK)
-					{
-						uint32_t end = (start + CHUNK < R) ? start + CHUNK : R;
-#pragma omp task firstprivate(start, end, rows, qn) shared(qry, ref, ani_opt)
-						{
-							for (uint32_t rn = start; rn < end; ++rn)
-							{
-								compute_row_for_qr(qry, ref, qn, rn, ani_opt, rows);
-							}
-						}
-					} /* taskgroup waits here */
+            for (uint32_t qn = 0; qn < Q; ++qn) {
+                /* One task per query */
+                #pragma omp task firstprivate(qn, many_queries) shared(next_qn, qry, ref, ani_opt, outfp)
+                {
+                    /* Allocate rows for this query; freed before task ends → memory bounded. */
+                    ani_row_t *rows = (ani_row_t*)malloc((size_t)R * sizeof(ani_row_t));
+                    kstring_t  ks   = {0,0,0};
 
-					/* Sort & format */
-					qsort(rows, R, sizeof(rows[0]), cmp_ani_desc);
+                    if (rows) {
+                        if (many_queries) {
+                            /* Case A: many queries → keep rn serial inside the task (best cache locality). */
+                            for (uint32_t rn = 0; rn < R; ++rn)
+                                compute_row_for_qr(qry, ref, qn, rn, ani_opt, rows);
+                        } else {
+                            /* Case B: few queries (e.g., Q==1) → fan out rn across threads with chunked tasks. */
+                            const uint32_t CHUNK = 256; /* tune 64–1024 */
+                            #pragma omp taskgroup
+                            for (uint32_t start = 0; start < R; start += CHUNK) {
+                                const uint32_t end = (start + CHUNK < R) ? start + CHUNK : R;
+                                #pragma omp task firstprivate(start, end, qn, rows) shared(qry, ref, ani_opt)
+                                {
+                                    for (uint32_t rn = start; rn < end; ++rn)
+                                        compute_row_for_qr(qry, ref, qn, rn, ani_opt, rows);
+                                }
+                            } /* taskgroup waits here */
+                        }
 
-					kstring_t *ks = &out[qn];
-					ks->l = 0;
-					for (uint32_t i = 0; i < R; ++i)
-					{
-						uint32_t rn = rows[i].rn;
-						ksprintf(ks, "%s\t%s\t%d\t%f\t%f\t%d\t%d\t%d\t%lf\n",
-								 ref->gname[rn], qry->gname[qn],
-								 rows[i].XnY_ctx, rows[i].af_qry, rows[i].af_ref,
-								 rows[i].N_diff_obj, rows[i].N_diff_obj_section,
-								 rows[i].N_mut2_ctx, rows[i].ani);
-					}
-					free(rows);
-				}
-			} /* end task */
-		}
-		/* implicit taskwait at end of parallel region */
-	}
+                        /* Sort refs by ANI (desc) and format */
+                        qsort(rows, R, sizeof(rows[0]), cmp_ani_desc);
 
-	/* Deterministic output: qn order */
-	for (uint32_t qn = 0; qn < Q; ++qn)
-	{
-		if (out[qn].l)
-			fwrite(out[qn].s, 1, out[qn].l, outfp);
-		free(out[qn].s);
-	}
-	free(out);
+                        for (uint32_t i = 0; i < R; ++i) {
+                            const uint32_t rn = rows[i].rn;
+                            ksprintf(&ks, "%s\t%s\t%d\t%f\t%f\t%d\t%d\t%d\t%lf\n",
+                                     ref->gname[rn], qry->gname[qn],
+                                     rows[i].XnY_ctx, rows[i].af_qry, rows[i].af_ref,
+                                     rows[i].N_diff_obj, rows[i].N_diff_obj_section,
+                                     rows[i].N_mut2_ctx, rows[i].ani);
+                        }
+                    }
 
-	if (outfp != stdout)
-		fclose(outfp);
+#ifndef PRINT_UNORDERED
+                    /* Strict qn-ordered printing */
+                    while (atomic_load_explicit(&next_qn, memory_order_acquire) != qn) {
+                        #if defined(__x86_64__) || defined(__i386__)
+                        __builtin_ia32_pause();
+                        #endif
+                    }
+#endif
+                    if (ks.l) {
+                        #ifdef PRINT_UNORDERED
+                        #pragma omp critical(print)
+                        #endif
+                        fwrite(ks.s, 1, ks.l, outfp);
+                    }
+#ifndef PRINT_UNORDERED
+                    atomic_fetch_add_explicit(&next_qn, 1u, memory_order_release);
+#endif
+                    free(ks.s);
+                    free(rows);
+                } /* end query task */
+            } /* for qn */
+        } /* single */
+        /* implicit taskwait at end of parallel region */
+    } /* parallel */
+
+    if (outfp != stdout) fclose(outfp);
 }
 
 void comb_sortedsketch64Xcomb_sortedsketch64(ani_opt_t *ani_opt)
