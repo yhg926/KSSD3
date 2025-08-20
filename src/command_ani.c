@@ -578,22 +578,28 @@ void comb_sortedsketch64Xcomb_sortedsketch64_sorted_per_q(ani_opt_t *ani_opt)
 				ani_row_t *rows = (ani_row_t *)malloc((size_t)R * sizeof(ani_row_t));
 				if (!rows)
 				{
-/* OOM: just leave out[qn] empty; optionally log once */
-#if 0
-#pragma omp critical
-        fprintf(stderr, "warning: OOM rows for qn=%u\n", qn);
-#endif
+					/* leave out[qn] empty */
 				}
 				else
 				{
-/* Parallelize all rn for this qn across the team */
-#pragma omp taskloop grainsize(64)
-					for (uint32_t rn = 0; rn < R; ++rn)
-					{
-						compute_row_for_qr(qry, ref, qn, rn, ani_opt, rows);
-					}
+					/* Fan out rn-work into many tasks (no taskloop needed) */
+					const uint32_t CHUNK = 256; // tune: 64–1024
+					uint32_t start;
 
-					/* Sort and format */
+#pragma omp taskgroup // wait for rn-chunks before sort
+					for (start = 0; start < R; start += CHUNK)
+					{
+						uint32_t end = (start + CHUNK < R) ? start + CHUNK : R;
+#pragma omp task firstprivate(start, end, rows, qn) shared(qry, ref, ani_opt)
+						{
+							for (uint32_t rn = start; rn < end; ++rn)
+							{
+								compute_row_for_qr(qry, ref, qn, rn, ani_opt, rows);
+							}
+						}
+					} /* taskgroup waits here */
+
+					/* Sort & format */
 					qsort(rows, R, sizeof(rows[0]), cmp_ani_desc);
 
 					kstring_t *ks = &out[qn];
