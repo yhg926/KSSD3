@@ -514,7 +514,7 @@ static inline void compute_row_for_qr(
     const double af_r = (double)f.XnY_ctx / (double)len_ref;
 
     double ani = 0.0;
-    if (!(af_q < opt->afcut || af_r < opt->afcut)) {
+    if (!( af_r < opt->afcut || f.XnY_ctx < 100 )) {
         const double dist = get_generic_dist_from_features(&f);
         ani = 1.0 - dist;
     }
@@ -588,6 +588,7 @@ void comb_sortedsketch64Xcomb_sortedsketch64_sorted_per_q(ani_opt_t *ani_opt)
 
                         for (uint32_t i = 0; i < R; ++i) {
                             const uint32_t rn = rows[i].rn;
+							if(rows[i].ani > ani_opt->anicut )
                             ksprintf(&ks, "%s\t%s\t%d\t%f\t%f\t%d\t%d\t%d\t%lf\n",
                                      ref->gname[rn], qry->gname[qn],
                                      rows[i].XnY_ctx, rows[i].af_qry, rows[i].af_ref,
