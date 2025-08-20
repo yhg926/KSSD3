@@ -237,8 +237,10 @@ int cmd_ani(struct argp_state *state)
 	if (ani_opt.qrydir[0] != '\0')
 	{
 		dim_sketch_stat_t *qry_dim_sketch_stat = read_from_file(test_get_fullpath(ani_opt.qrydir, sketch_stat), &file_size);
-		const_comask_init(qry_dim_sketch_stat);
+		if (qry_dim_sketch_stat->conflict) //imply raw reads? which not trained in lm3ways_dist_from_features.  
+			get_generic_dist_from_features = get_naive_dist; 
 
+		const_comask_init(qry_dim_sketch_stat);
 		if (ani_opt.refdir[0] == '\0')
 			return 1; // compute_triangle(&ani_opt);
 		else

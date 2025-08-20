@@ -504,7 +504,7 @@ void comb_sortedsketch64Xcomb_sortedsketch64_sorted_per_q(ani_opt_t *ani_opt)
 {
     unify_sketch_t *qry = generic_sketch_parse(ani_opt->qrydir);
     unify_sketch_t *ref = generic_sketch_parse(ani_opt->refdir);
-	if(ref->conflict) err(EXIT_FAILURE, "%s(): ref sketch contain conflict objs is not allowed",__func__);
+	if(ref->conflict) err(EXIT_FAILURE, "%s(): ref %s contain conflict objs!",__func__,ani_opt->refdir);
 
     const uint32_t Q = qry->infile_num;
     const uint32_t R = ref->infile_num;
@@ -621,7 +621,7 @@ void comb_sortedsketch64Xcomb_sortedsketch64(ani_opt_t *ani_opt)
 			ani_features_t ani_features;
 			uint64_t *arr_qry = qry_result->comb_sketch + qry_result->sketch_index[qn];
 			size_t len_qry = qry_result->sketch_index[qn + 1] - qry_result->sketch_index[qn];
-			get_ani_features_ctx_min_over_conflicts_a_only(arr_ref, len_ref, arr_qry, len_qry, &ani_features);
+			get_ani_features_from_two_sorted_ctxobj64(arr_ref, len_ref, arr_qry, len_qry, &ani_features);
 			double af_qry = (double)ani_features.XnY_ctx / len_qry;
 			double af_ref = (double)ani_features.XnY_ctx / len_ref;
 
