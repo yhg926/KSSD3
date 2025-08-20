@@ -17,7 +17,7 @@
 #include <omp.h>
 #include <stdatomic.h>
 #include <ctype.h>
-#include "../klib/kstring.h"   // from klib
+#include "../klib/kstring.h" // from klib
 #include "../klib/khash.h"
 // #include "../klib/khashl.h"
 #define GID_NBITS 20 // 2^20, 1M
@@ -477,120 +477,154 @@ void sorted_ctxgidobj_arrXcomb_sortedsketch64(unify_sketch_t *qry_result, ctxgid
 //...
 */
 
-
-typedef struct {
-    uint32_t rn;
-    double   ani;       // final ANI (set to 0 if fails cutoff)
-    double   af_qry;
-    double   af_ref;
-    int      XnY_ctx;
-    int      N_diff_obj;
-    int      N_diff_obj_section;
-    int      N_mut2_ctx;
+typedef struct
+{
+	uint32_t rn;
+	double ani;
+	double af_qry, af_ref;
+	int XnY_ctx, N_diff_obj, N_diff_obj_section, N_mut2_ctx;
 } ani_row_t;
 
-static int cmp_ani_desc(const void *pa, const void *pb) {
-    const ani_row_t *a = (const ani_row_t*)pa;
-    const ani_row_t *b = (const ani_row_t*)pb;
-    /* Sort by ANI descending; tie-breaker: higher af_qry, then lower rn for stability */
-    if (a->ani < b->ani) return  1;
-    if (a->ani > b->ani) return -1;
-    if (a->af_qry < b->af_qry) return  1;
-    if (a->af_qry > b->af_qry) return -1;
-    return (a->rn > b->rn) - (a->rn < b->rn);
+static int cmp_ani_desc(const void *pa, const void *pb)
+{
+	const ani_row_t *a = (const ani_row_t *)pa;
+	const ani_row_t *b = (const ani_row_t *)pb;
+	if (a->ani < b->ani)
+		return 1;
+	if (a->ani > b->ani)
+		return -1;
+	if (a->af_qry < b->af_qry)
+		return 1;
+	if (a->af_qry > b->af_qry)
+		return -1;
+	return (a->rn > b->rn) - (a->rn < b->rn);
 }
 
+/* --- Core: compute one row (qn,rn) into rows[rn] --- */
+static inline void compute_row_for_qr(
+	const unify_sketch_t *qry, const unify_sketch_t *ref,
+	uint32_t qn, uint32_t rn, const ani_opt_t *opt,
+	ani_row_t *rows)
+{
+	uint64_t *arr_qry = qry->comb_sketch + qry->sketch_index[qn];
+	size_t len_qry = qry->sketch_index[qn + 1] - qry->sketch_index[qn];
+
+	uint64_t *arr_ref = ref->comb_sketch + ref->sketch_index[rn];
+	size_t len_ref = ref->sketch_index[rn + 1] - ref->sketch_index[rn];
+
+	ani_features_t f;
+	/* Only 'a' (query) may have conflicts; 'b' (ref) must be conflict-free */
+	get_ani_features_ctx_min_over_conflicts_a_only(arr_qry, len_qry, arr_ref, len_ref, &f);
+
+	double af_q = (double)f.XnY_ctx / (double)len_qry;
+	double af_r = (double)f.XnY_ctx / (double)len_ref;
+
+	double ani = 0.0;
+	if (!(af_q < opt->afcut || af_r < opt->afcut))
+	{
+		double dist = get_generic_dist_from_features(&f);
+		ani = 1.0 - dist;
+	}
+
+	ani_row_t *row = &rows[rn];
+	row->rn = rn;
+	row->ani = ani;
+	row->af_qry = af_q;
+	row->af_ref = af_r;
+	row->XnY_ctx = f.XnY_ctx;
+	row->N_diff_obj = f.N_diff_obj;
+	row->N_diff_obj_section = f.N_diff_obj_section;
+	row->N_mut2_ctx = f.N_mut2_ctx;
+}
+
+/* --- Main: one parallel region with tasks+taskloop --- */
 void comb_sortedsketch64Xcomb_sortedsketch64_sorted_per_q(ani_opt_t *ani_opt)
 {
-    unify_sketch_t *qry = generic_sketch_parse(ani_opt->qrydir);
-    unify_sketch_t *ref = generic_sketch_parse(ani_opt->refdir);
-	if(ref->conflict) err(EXIT_FAILURE, "%s(): ref %s contain conflict objs!",__func__,ani_opt->refdir);
+	unify_sketch_t *qry = generic_sketch_parse(ani_opt->qrydir);
+	unify_sketch_t *ref = generic_sketch_parse(ani_opt->refdir);
+	if (ref->conflict)
+		errx(EXIT_FAILURE, "%s(): ref '%s' contains conflicting objects!", __func__, ani_opt->refdir);
 
-    const uint32_t Q = qry->infile_num;
-    const uint32_t R = ref->infile_num;
+	const uint32_t Q = qry->infile_num;
+	const uint32_t R = ref->infile_num;
 
-    FILE *outfp = ani_opt->outf[0] == '\0' ? stdout : fopen(ani_opt->outf, "w");
-    if (!outfp) { perror("fopen"); return; }
+	FILE *outfp = (ani_opt->outf[0] == '\0') ? stdout : fopen(ani_opt->outf, "w");
+	if (!outfp)
+	{
+		perror("fopen");
+		return;
+	}
+	fprintf(outfp, "%s\n", print_header);
 
-    // Header once
-    fprintf(outfp, "%s\n", print_header);
+	kstring_t *out = (kstring_t *)calloc(Q, sizeof(kstring_t));
+	if (!out)
+	{
+		perror("calloc out");
+		if (outfp != stdout)
+			fclose(outfp);
+		return;
+	}
 
-    // One buffer per qn (no locking needed; each index written by only one thread)
-    kstring_t *out = (kstring_t*)calloc(Q, sizeof(kstring_t));
-    if (!out) { perror("calloc"); if (outfp!=stdout) fclose(outfp); return; }
+	int P = (ani_opt->p > 0) ? ani_opt->p : 1;
 
-    // Parallelize over qn
-    #pragma omp parallel for schedule(dynamic) num_threads(ani_opt->p)
-    for (uint32_t qn = 0; qn < Q; ++qn) {
-        // Prepare query sketch
-        uint64_t *arr_qry = qry->comb_sketch + qry->sketch_index[qn];
-        size_t    len_qry = qry->sketch_index[qn + 1] - qry->sketch_index[qn];
+#pragma omp parallel num_threads(P)
+	{
+#pragma omp single nowait
+		for (uint32_t qn = 0; qn < Q; ++qn)
+		{
+			/* One task per query */
+#pragma omp task firstprivate(qn) shared(out, qry, ref, ani_opt)
+			{
+				ani_row_t *rows = (ani_row_t *)malloc((size_t)R * sizeof(ani_row_t));
+				if (!rows)
+				{
+/* OOM: just leave out[qn] empty; optionally log once */
+#if 0
+#pragma omp critical
+        fprintf(stderr, "warning: OOM rows for qn=%u\n", qn);
+#endif
+				}
+				else
+				{
+/* Parallelize all rn for this qn across the team */
+#pragma omp taskloop grainsize(64)
+					for (uint32_t rn = 0; rn < R; ++rn)
+					{
+						compute_row_for_qr(qry, ref, qn, rn, ani_opt, rows);
+					}
 
-        // Local vector for all rn results
-        ani_row_t *rows = (ani_row_t*)malloc((size_t)R * sizeof(ani_row_t));
-        if (!rows) continue; // low-memory fallback: skip qn
+					/* Sort and format */
+					qsort(rows, R, sizeof(rows[0]), cmp_ani_desc);
 
-        uint32_t nrows = 0;
+					kstring_t *ks = &out[qn];
+					ks->l = 0;
+					for (uint32_t i = 0; i < R; ++i)
+					{
+						uint32_t rn = rows[i].rn;
+						ksprintf(ks, "%s\t%s\t%d\t%f\t%f\t%d\t%d\t%d\t%lf\n",
+								 ref->gname[rn], qry->gname[qn],
+								 rows[i].XnY_ctx, rows[i].af_qry, rows[i].af_ref,
+								 rows[i].N_diff_obj, rows[i].N_diff_obj_section,
+								 rows[i].N_mut2_ctx, rows[i].ani);
+					}
+					free(rows);
+				}
+			} /* end task */
+		}
+		/* implicit taskwait at end of parallel region */
+	}
 
-        for (uint32_t rn = 0; rn < R; ++rn) {
-            uint64_t *arr_ref = ref->comb_sketch + ref->sketch_index[rn];
-            size_t    len_ref = ref->sketch_index[rn + 1] - ref->sketch_index[rn];
+	/* Deterministic output: qn order */
+	for (uint32_t qn = 0; qn < Q; ++qn)
+	{
+		if (out[qn].l)
+			fwrite(out[qn].s, 1, out[qn].l, outfp);
+		free(out[qn].s);
+	}
+	free(out);
 
-            ani_features_t f;
-            get_ani_features_ctx_min_over_conflicts_a_only (arr_qry, len_qry,arr_ref, len_ref, &f);
-
-            double af_qry = (double)f.XnY_ctx / (double)len_qry;
-            double af_ref = (double)f.XnY_ctx / (double)len_ref;
-
-            double ani;
-            if (af_qry < ani_opt->afcut || af_ref < ani_opt->afcut) {
-                ani = 0.0;  // per your rule
-            } else {
-                double dist = get_generic_dist_from_features(&f);
-                ani = 1.0 - dist;
-            } 
-
-            ani_row_t *row = &rows[nrows++];
-            row->rn  = rn;
-            row->ani = ani;
-            row->af_qry = af_qry;
-            row->af_ref = af_ref;
-            row->XnY_ctx = f.XnY_ctx;
-            row->N_diff_obj = f.N_diff_obj;
-            row->N_diff_obj_section = f.N_diff_obj_section;
-            row->N_mut2_ctx = f.N_mut2_ctx;
-        }
-
-        // Sort descending by ANI (ties by af_qry, then rn)
-        qsort(rows, nrows, sizeof(rows[0]), cmp_ani_desc);
-
-        // Format into this qn's buffer (grouped by qn, rn sorted inside)
-        kstring_t *ks = &out[qn];
-        ks->l = 0; // ensure clean
-        for (uint32_t i = 0; i < nrows; ++i) {
-            uint32_t rn = rows[i].rn;
-            ksprintf(ks, "%s\t%s\t%d\t%f\t%f\t%d\t%d\t%d\t%lf\n",
-                     ref->gname[rn], qry->gname[qn],
-                     rows[i].XnY_ctx,
-                     rows[i].af_qry,
-                     rows[i].af_ref,
-                     rows[i].N_diff_obj,
-                     rows[i].N_diff_obj_section,
-                     rows[i].N_mut2_ctx,
-                     rows[i].ani);
-        }
-
-        free(rows);
-    }
-
-    // Print in qn order for deterministic output
-    for (uint32_t qn = 0; qn < Q; ++qn) {
-        if (out[qn].l) fwrite(out[qn].s, 1, out[qn].l, outfp);
-        free(out[qn].s);
-    }
-    free(out);
-
-    if (outfp != stdout) fclose(outfp);
+	if (outfp != stdout)
+		fclose(outfp);
 }
 
 void comb_sortedsketch64Xcomb_sortedsketch64(ani_opt_t *ani_opt)
@@ -607,7 +641,7 @@ void comb_sortedsketch64Xcomb_sortedsketch64(ani_opt_t *ani_opt)
 		}
 		else
 	*/
-	fprintf(outfp,"%s\n", print_header);
+	fprintf(outfp, "%s\n", print_header);
 	// #pragma omp parallel for num_threads(32) schedule(guided)
 	for (uint32_t rn = 0; rn < ref_result->infile_num; rn++)
 	{
@@ -666,7 +700,8 @@ size_t *find_first_occurrences_AT_ctxgidobj_arr(const uint64_t *a, size_t a_size
 												const ctxgidobj_t *b, size_t b_size)
 {
 	size_t *indices = malloc(a_size * sizeof(size_t));
-	if (!indices) return NULL;
+	if (!indices)
+		return NULL;
 	size_t low = 0; // Track lower bound for binary search
 	int nobjbits = Bitslen.obj;
 
@@ -674,12 +709,13 @@ size_t *find_first_occurrences_AT_ctxgidobj_arr(const uint64_t *a, size_t a_size
 	{
 		const uint64_t target = a[i] >> nobjbits; // (2*(2*holen + iolen ));
 		// when conflict objects are kept, skip searching if target[i+1] == target[i].
-		if(i >0 && target == a[i-1] >> nobjbits) {
+		if (i > 0 && target == a[i - 1] >> nobjbits)
+		{
 			indices[i] = indices[i - 1]; // Use the previous index if the current target is the same
 			continue;
 		}
-	
-		size_t high = b_size;		
+
+		size_t high = b_size;
 		// Leftmost binary search within [low, high)
 		while (low < high)
 		{
@@ -695,7 +731,7 @@ size_t *find_first_occurrences_AT_ctxgidobj_arr(const uint64_t *a, size_t a_size
 		}
 
 		// Check if target was found: modified from: if (low < b_size && b[low] == target) {
-		if (low < b_size && (b[low].ctxgid >> GID_NBITS == target))	
+		if (low < b_size && (b[low].ctxgid >> GID_NBITS == target))
 			indices[i] = low;
 		else
 			indices[i] = SIZE_MAX; // Not found
@@ -809,86 +845,108 @@ void simple_sortedsketch64Xcomb_sortedsketch64(simple_sketch_t *simple_sketch, i
 // fencepost search method
 #include <limits.h>
 
-static inline uint32_t top_k_bits_u64(uint64_t x, int k) {
-    if (k <= 0) return 0u;
-    if (k >= 64) return (uint32_t)x;   /* defensive; we clamp k well below 64 */
-    return (uint32_t)(x >> (64 - k));
+static inline uint32_t top_k_bits_u64(uint64_t x, int k)
+{
+	if (k <= 0)
+		return 0u;
+	if (k >= 64)
+		return (uint32_t)x; /* defensive; we clamp k well below 64 */
+	return (uint32_t)(x >> (64 - k));
 }
 
-int kssd_choose_k_fenceposts(size_t b_size, size_t a_size) {
-    if (a_size == 0 || b_size == 0) return 14;
-    double ratio = (double)b_size / (double)a_size;            /* ≈ m = b/a */
-    int k = (ratio > 1.0) ? (int)floor(log2(ratio) + 0.5) : 0; /* ~log2(m) */
-    if (k < 12) k = 12;   /* 4K buckets  (~32 KB of fenceposts) */
-    if (k > 20) k = 20;   /* 1M buckets  (~8  MB of fenceposts, 64-bit size_t) */
-    return k;
+int kssd_choose_k_fenceposts(size_t b_size, size_t a_size)
+{
+	if (a_size == 0 || b_size == 0)
+		return 14;
+	double ratio = (double)b_size / (double)a_size;			   /* ≈ m = b/a */
+	int k = (ratio > 1.0) ? (int)floor(log2(ratio) + 0.5) : 0; /* ~log2(m) */
+	if (k < 12)
+		k = 12; /* 4K buckets  (~32 KB of fenceposts) */
+	if (k > 20)
+		k = 20; /* 1M buckets  (~8  MB of fenceposts, 64-bit size_t) */
+	return k;
 }
 
-int kssd_build_fenceposts_ctxgid(const ctxgidobj_t *b, size_t b_size, int k, size_t *F) {
-    if (!b || !F || k < 0 || k > 32) return -1;
-    const size_t buckets = (size_t)1u << k;
+int kssd_build_fenceposts_ctxgid(const ctxgidobj_t *b, size_t b_size, int k, size_t *F)
+{
+	if (!b || !F || k < 0 || k > 32)
+		return -1;
+	const size_t buckets = (size_t)1u << k;
 
-    for (size_t t = 0; t <= buckets; ++t) F[t] = b_size;
+	for (size_t t = 0; t <= buckets; ++t)
+		F[t] = b_size;
 
-    size_t next = 0;
-    for (size_t i = 0; i < b_size; ++i) {
-        uint64_t key  = (uint64_t)b[i].ctxgid >> GID_NBITS;  /* effective key */
-        uint32_t topk = top_k_bits_u64(key, k);
-        while (next <= topk) F[next++] = i;
-        if (next > buckets) break;
-    }
-    while (next <= buckets) F[next++] = b_size;
-    return 0;
+	size_t next = 0;
+	for (size_t i = 0; i < b_size; ++i)
+	{
+		uint64_t key = (uint64_t)b[i].ctxgid >> GID_NBITS; /* effective key */
+		uint32_t topk = top_k_bits_u64(key, k);
+		while (next <= topk)
+			F[next++] = i;
+		if (next > buckets)
+			break;
+	}
+	while (next <= buckets)
+		F[next++] = b_size;
+	return 0;
 }
 
 static inline size_t lb_in_bucket_ctxgid(const ctxgidobj_t *b, const size_t *F, int k,
-                                         uint64_t target_key)
+										 uint64_t target_key)
 {
-    const size_t buckets = (size_t)1u << k;
-    uint32_t t = top_k_bits_u64(target_key, k);
-    if (t > buckets) t = (uint32_t)buckets; /* defensive */
+	const size_t buckets = (size_t)1u << k;
+	uint32_t t = top_k_bits_u64(target_key, k);
+	if (t > buckets)
+		t = (uint32_t)buckets; /* defensive */
 
-    size_t lo = F[t];
-    size_t hi = F[t + 1];
+	size_t lo = F[t];
+	size_t hi = F[t + 1];
 
-    while (lo < hi) {
-        size_t mid = lo + ((hi - lo) >> 1);
-        uint64_t mid_key = (uint64_t)b[mid].ctxgid >> GID_NBITS;
-        if (mid_key < target_key) lo = mid + 1; else hi = mid;
-    }
-    return lo; /* first position with key >= target_key (may be hi) */
+	while (lo < hi)
+	{
+		size_t mid = lo + ((hi - lo) >> 1);
+		uint64_t mid_key = (uint64_t)b[mid].ctxgid >> GID_NBITS;
+		if (mid_key < target_key)
+			lo = mid + 1;
+		else
+			hi = mid;
+	}
+	return lo; /* first position with key >= target_key (may be hi) */
 }
 
 size_t *kssd_find_first_occurrences_fenceposts(const uint64_t *a, size_t a_size,
-                                               const ctxgidobj_t *b, size_t b_size,
-                                               const size_t *F, int k, unsigned nobjbits)
+											   const ctxgidobj_t *b, size_t b_size,
+											   const size_t *F, int k, unsigned nobjbits)
 {
-    if (!a || !b || !F) return NULL;
+	if (!a || !b || !F)
+		return NULL;
 
-    size_t *idx = (size_t*)malloc(a_size * sizeof *idx);
-    if (!idx) return NULL;
+	size_t *idx = (size_t *)malloc(a_size * sizeof *idx);
+	if (!idx)
+		return NULL;
 
-    uint64_t prev_key = UINT64_MAX;
-    size_t   prev_idx = SIZE_MAX;
+	uint64_t prev_key = UINT64_MAX;
+	size_t prev_idx = SIZE_MAX;
 
-    for (size_t i = 0; i < a_size; ++i) {
-        uint64_t target_key = a[i] >> nobjbits;
+	for (size_t i = 0; i < a_size; ++i)
+	{
+		uint64_t target_key = a[i] >> nobjbits;
 
-        if (i && target_key == prev_key) { /* reuse for duplicates in a */
-            idx[i] = prev_idx;
-            continue;
-        }
+		if (i && target_key == prev_key)
+		{ /* reuse for duplicates in a */
+			idx[i] = prev_idx;
+			continue;
+		}
 
-        size_t pos = lb_in_bucket_ctxgid(b, F, k, target_key);
+		size_t pos = lb_in_bucket_ctxgid(b, F, k, target_key);
 
-        if (pos < b_size && (((uint64_t)b[pos].ctxgid >> GID_NBITS) == target_key))
-            idx[i] = pos;
-        else
-            idx[i] = SIZE_MAX;
+		if (pos < b_size && (((uint64_t)b[pos].ctxgid >> GID_NBITS) == target_key))
+			idx[i] = pos;
+		else
+			idx[i] = SIZE_MAX;
 
-        prev_key = target_key;
-        prev_idx = idx[i];
-    }
-    return idx;
+		prev_key = target_key;
+		prev_idx = idx[i];
+	}
+	return idx;
 }
-
