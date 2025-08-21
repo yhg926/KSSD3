@@ -534,7 +534,33 @@ static inline int compute_row_if_survivor(
     return 1;
 }
 
-/* Filter + sort survivors per query; parallel & memory-bounded */
+/* typedef to avoid anonymous-struct warnings from kvec_t params */
+typedef kvec_t(ani_row_t) kv_ani_row_t;
+
+/* --- tiny helpers --- */
+static inline void kv_append_rows(kv_ani_row_t *dst, const kv_ani_row_t *src)
+{
+    const size_t n = kv_size(*src);
+    if (!n) return;
+    const size_t old = kv_size(*dst);
+    kv_resize(ani_row_t, *dst, old + n);
+    memcpy(&kv_A(*dst, old), &kv_A(*src, 0), n * sizeof(ani_row_t));
+    kv_size(*dst) = old + n;
+}
+
+static inline void format_rows_to_kstr(const unify_sketch_t *qry, const unify_sketch_t *ref,
+                                       uint32_t qn, const kv_ani_row_t *rows, kstring_t *ks_out)
+{
+    for (size_t i = 0; i < kv_size(*rows); ++i) {
+        const ani_row_t *r = &kv_A(*rows, i);
+        ksprintf(ks_out, "%s\t%s\t%d\t%f\t%f\t%d\t%d\t%d\t%lf\n",
+                 qry->gname[qn], ref->gname[r->rn],
+                 r->XnY_ctx, r->af_qry, r->af_ref,
+                 r->N_diff_obj, r->N_diff_obj_section, r->N_mut2_ctx, r->ani);
+    }
+}
+
+/* --- main --- */
 void comb_sortedsketch64Xcomb_sortedsketch64_filter_and_sort_survivors(ani_opt_t *ani_opt)
 {
     unify_sketch_t *qry = generic_sketch_parse(ani_opt->qrydir);
@@ -551,9 +577,102 @@ void comb_sortedsketch64Xcomb_sortedsketch64_filter_and_sort_survivors(ani_opt_t
 
     const int P = (ani_opt->p > 0) ? ani_opt->p : 1;
 
-    /* Ordered printing ticket. Define PRINT_UNORDERED to print as ready. */
-    _Atomic uint32_t next_qn = 0;
-    /* #define PRINT_UNORDERED 1 */
+    /* ---- P==1: fast serial path (logic unchanged) ---- */
+    if (P == 1) {
+        for (uint32_t qn = 0; qn < Q; ++qn) {
+            kv_ani_row_t surv; kv_init(surv);
+            kstring_t ks_out = (kstring_t){0,0,0};
+
+            ani_row_t tmp;
+            for (uint32_t rn = 0; rn < R; ++rn) {
+                if (compute_row_if_survivor(qry, ref, qn, rn, ani_opt, &tmp))
+                    kv_push(ani_row_t, surv, tmp);
+            }
+
+            if (kv_size(surv))
+                qsort(&kv_A(surv,0), kv_size(surv), sizeof(ani_row_t), cmp_ani_desc);
+
+            format_rows_to_kstr(qry, ref, qn, &surv, &ks_out);
+            if (ks_out.l) fwrite(ks_out.s, 1, ks_out.l, outfp);
+
+            kv_destroy(surv);
+            free(ks_out.s);
+        }
+        if (outfp != stdout) fclose(outfp);
+        return;
+    }
+
+#ifdef PRINT_UNORDERED
+    /* ---- Parallel, unordered print (as-ready) ---- */
+    #pragma omp parallel num_threads(P)
+    {
+        #pragma omp single nowait
+        {
+            const int many_queries = (Q >= (uint32_t)P);
+
+            for (uint32_t qn = 0; qn < Q; ++qn) {
+                #pragma omp task firstprivate(qn, many_queries) shared(qry,ref,ani_opt,outfp)
+                {
+                    kv_ani_row_t surv; kv_init(surv);
+
+                    if (many_queries) {
+                        ani_row_t tmp;
+                        for (uint32_t rn = 0; rn < R; ++rn) {
+                            if (compute_row_if_survivor(qry, ref, qn, rn, ani_opt, &tmp))
+                                kv_push(ani_row_t, surv, tmp);
+                        }
+                    } else {
+                        #pragma omp taskgroup
+                        {
+                            const uint32_t CHUNK = 256;
+                            for (uint32_t start = 0; start < R; start += CHUNK) {
+                                const uint32_t end = (start + CHUNK < R) ? start + CHUNK : R;
+                                #pragma omp task firstprivate(start,end,qn) shared(qry,ref,ani_opt,surv)
+                                {
+                                    kv_ani_row_t local; kv_init(local);
+                                    ani_row_t tmp;
+                                    for (uint32_t rn = start; rn < end; ++rn) {
+                                        if (compute_row_if_survivor(qry, ref, qn, rn, ani_opt, &tmp))
+                                            kv_push(ani_row_t, local, tmp);
+                                    }
+                                    if (kv_size(local)) {
+                                        #pragma omp critical (append_survivors)
+                                        kv_append_rows(&surv, &local);
+                                    }
+                                    kv_destroy(local);
+                                }
+                            }
+                        }
+                    }
+
+                    if (kv_size(surv))
+                        qsort(&kv_A(surv,0), kv_size(surv), sizeof(ani_row_t), cmp_ani_desc);
+
+                    kstring_t ks_out = (kstring_t){0,0,0};
+                    format_rows_to_kstr(qry, ref, qn, &surv, &ks_out);
+
+                    if (ks_out.l) {
+                        #pragma omp critical (print)
+                        fwrite(ks_out.s, 1, ks_out.l, outfp);
+                    }
+
+                    free(ks_out.s);
+                    kv_destroy(surv);
+                } /* compute+print task */
+            }
+        } /* single */
+    } /* parallel */
+#else
+    /* ---- Parallel, ordered print: compute in parallel; only print is serialized ---- */
+
+    /* tokens: comp[qn] signals compute done; order[i] forms a print chain i->i+1 */
+    char *comp  = (char*)calloc(Q,   1);
+    char *order = (char*)calloc(Q+1, 1);
+    if (!comp || !order) err(EXIT_FAILURE, "calloc tokens");
+
+    /* per-qn output buffers produced by compute, consumed by print */
+    kstring_t *ks_arr = (kstring_t*)calloc(Q, sizeof(kstring_t));
+    if (!ks_arr) err(EXIT_FAILURE, "calloc ks_arr");
 
     #pragma omp parallel num_threads(P)
     {
@@ -562,29 +681,27 @@ void comb_sortedsketch64Xcomb_sortedsketch64_filter_and_sort_survivors(ani_opt_t
             const int many_queries = (Q >= (uint32_t)P);
 
             for (uint32_t qn = 0; qn < Q; ++qn) {
-                #pragma omp task firstprivate(qn, many_queries) shared(qry,ref,ani_opt,outfp,next_qn)
+
+                /* 1) compute task: fully parallel across qn */
+                #pragma omp task firstprivate(qn, many_queries) shared(qry,ref,ani_opt,ks_arr,comp) depend(out: comp[qn])
                 {
-                    /* Per-query survivor vector and output buffer */
-                    kvec_t(ani_row_t) surv; kv_init(surv);
-                    kstring_t ks_out = {0,0,0};
+                    kv_ani_row_t surv; kv_init(surv);
 
                     if (many_queries) {
-                        /* Case A: many queries → do rn serially (best cache locality) */
                         ani_row_t tmp;
                         for (uint32_t rn = 0; rn < R; ++rn) {
                             if (compute_row_if_survivor(qry, ref, qn, rn, ani_opt, &tmp))
                                 kv_push(ani_row_t, surv, tmp);
                         }
                     } else {
-                        /* Case B: few queries (e.g., Q==1) → fan out rn across threads (chunked tasks) */
                         #pragma omp taskgroup
                         {
-                            const uint32_t CHUNK = 256; /* tune 128–1024 */
+                            const uint32_t CHUNK = 256;
                             for (uint32_t start = 0; start < R; start += CHUNK) {
                                 const uint32_t end = (start + CHUNK < R) ? start + CHUNK : R;
                                 #pragma omp task firstprivate(start,end,qn) shared(qry,ref,ani_opt,surv)
                                 {
-                                    kvec_t(ani_row_t) local; kv_init(local);
+                                    kv_ani_row_t local; kv_init(local);
                                     ani_row_t tmp;
                                     for (uint32_t rn = start; rn < end; ++rn) {
                                         if (compute_row_if_survivor(qry, ref, qn, rn, ani_opt, &tmp))
@@ -592,62 +709,45 @@ void comb_sortedsketch64Xcomb_sortedsketch64_filter_and_sort_survivors(ani_opt_t
                                     }
                                     if (kv_size(local)) {
                                         #pragma omp critical (append_survivors)
-                                        {
-                                            /* append local -> surv */
-                                            size_t old = kv_size(surv);
-                                            kv_resize(ani_row_t, surv, old + kv_size(local));
-                                            memcpy(&kv_A(surv,old), &kv_A(local,0),
-                                                   kv_size(local) * sizeof(ani_row_t));
-                                            kv_size(surv) = old + kv_size(local);
-                                        }
+                                        kv_append_rows(&surv, &local);
                                     }
                                     kv_destroy(local);
                                 }
                             }
-                        } /* taskgroup */
+                        }
                     }
 
-                    /* Sort only survivors by ANI descending */
                     if (kv_size(surv))
                         qsort(&kv_A(surv,0), kv_size(surv), sizeof(ani_row_t), cmp_ani_desc);
 
-                    /* Format to output buffer */
-                    for (size_t i = 0; i < kv_size(surv); ++i) {
-                        const ani_row_t *r = &kv_A(surv,i);
-                        ksprintf(&ks_out, "%s\t%s\t%d\t%f\t%f\t%d\t%d\t%d\t%lf\n",
-                                 ref->gname[r->rn], qry->gname[qn],
-                                 r->XnY_ctx, r->af_qry, r->af_ref,
-                                 r->N_diff_obj, r->N_diff_obj_section, r->N_mut2_ctx, r->ani);
-                    }
+                    kstring_t ks_out = (kstring_t){0,0,0};
+                    format_rows_to_kstr(qry, ref, qn, &surv, &ks_out);
 
-#ifndef PRINT_UNORDERED
-                    /* Print in qn order */
-                    while (atomic_load_explicit(&next_qn, memory_order_acquire) != qn) {
-                        #if defined(__x86_64__) || defined(__i386__)
-                        __builtin_ia32_pause();
-                        #endif
-                    }
-#endif
-                    if (ks_out.l) {
-                        #ifdef PRINT_UNORDERED
-                        #pragma omp critical (print)
-                        #endif
-                        fwrite(ks_out.s, 1, ks_out.l, outfp);
-                    }
-#ifndef PRINT_UNORDERED
-                    atomic_fetch_add_explicit(&next_qn, 1u, memory_order_release);
-#endif
-
+                    ks_arr[qn] = ks_out; /* move: keep buffer for print task */
                     kv_destroy(surv);
-                    free(ks_out.s);
-                } /* end task per qn */
+                }
+
+                /* 2) print task: serialized by order[] but can run as soon as qn computed */
+                #pragma omp task firstprivate(qn) shared(outfp, ks_arr, comp, order) depend(in: comp[qn]) depend(in: order[qn]) depend(out: order[qn+1])
+                {
+                    kstring_t *ksp = &ks_arr[qn];
+                    if (ksp->l)
+                        fwrite(ksp->s, 1, ksp->l, outfp);
+                    free(ksp->s);
+                    ksp->s = NULL; ksp->l = ksp->m = 0;
+                }
             } /* for qn */
         } /* single */
-        /* implicit taskwait here */
     } /* parallel */
+
+    free(ks_arr);
+    free(order);
+    free(comp);
+#endif /* PRINT_UNORDERED */
 
     if (outfp != stdout) fclose(outfp);
 }
+
 
 void comb_sortedsketch64Xcomb_sortedsketch64(ani_opt_t *ani_opt)
 {
