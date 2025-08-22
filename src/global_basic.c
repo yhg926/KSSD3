@@ -648,11 +648,12 @@ int mkdir_p(const char *path)
 
 // test if parent_path contain file dstat_f, return full path if has otherwise return NULL
 // orginally develop fo test dstat_f , but can generally test other file
+
 char *test_get_fullpath(const char *parent_path, const char *dstat_f)
 {
     struct stat path_stat;
     if (stat(parent_path, &path_stat) < 0)
-        err(errno, "test_get_fullpath()::%s", parent_path);
+        err(EXIT_FAILURE, "%s()%s", __func__, parent_path);
     if (S_ISDIR(path_stat.st_mode))
     {
         char *fullpath = malloc(PATHLEN + 1);

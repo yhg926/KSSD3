@@ -27,14 +27,15 @@ struct arg_ani
 
 static struct argp_option opt_ani[] =
 	{
-		{"ref", 'r', "<DIR>", 0, "Path of reference sketches, do not set if need trianlge\v", 1},
-		{"query", 'q', "<DIR>", 0, "Path of query sketches \v", 1},
+		{"ref", 'r', "<SKETCH>", 0, "Path of reference sketches, do not set if need trianlge\v", 1},
+		{"query", 'q', "<SKETCH>", 0, "Path of query sketches \v", 1},
+		{"qraw", 'x', "<SKETCH>", 0, "query sketches from unassembled raw reads.\v", 1},
 		{"index", 'i', "<FILE>", 0, "Inverted indexing of combined sketch.\v", 2},
 		//		{"model", 'M', "<FILE>", 0, "specify the trained ani model.\v", 2},
 		{"naive", 'v', 0, 0, "Use naive distane / ani caculation.\v", 2},
 		{"outfmt", 'm', "<0/1/2>", 0, "print results detail/matrix/triangle (0/1/2),[0]\v", 3},
 		{"slmetrics", 's', "<+-1..5>", 0, "Select metrics: Standard(1) / MashD(2) / AafD(3) / MashD_if_far(4) / AafD_if_far(5), ANI(+) and distance(-) [1]\v", 3},
-		{"afcut", 'f', "<FLOAT>", 0, "When report, Skip alignment fraction < [0.1] \v", 3},
+		{"afcut", 'f', "<FLOAT>", 0, "When report, Skip alignment fraction < [0.3] \v", 3},
 		{"anicut", 'n', "<FLOAT>", 0, "When report, Skip ani < [0.5] \v", 3},
 		{"control", 'c', "<FLOAT>", 0, "Skip duplicated samples (distance < c) [0] \v", 3},
 		{"glist", 'g', "<FILE>", 0, "Sample outfile for kssd set grouping \v", 4},
@@ -59,6 +60,7 @@ ani_opt_t ani_opt = {
 	.v = 0,	   // naive model
 	.s = 1,	   // select metrics: 1:standard, 2:MashD, 3:AafD, 4:MashD_if_far, 5:AafD_if_far
 	.pair = 0, // pairwise compute
+	.unassembled = 0,
 	.afcut = 0.3,
 	.anicut = 0.95,
 	.e = 1, // abort
@@ -71,6 +73,8 @@ ani_opt_t ani_opt = {
 	.num_remaining_args = 0, // int num_remaining_args; no option arguments num.
 	.remaining_args = NULL	 // char **remaining_args; no option arguments array.
 };
+
+
 
 static error_t parse_ani(int key, char *arg, struct argp_state *state)
 {
@@ -164,6 +168,13 @@ static error_t parse_ani(int key, char *arg, struct argp_state *state)
 		ani_opt.v = 1;
 		break;
 	}
+	case 'x':
+	{
+		strcpy(ani_opt.qrydir, arg);
+		ani_opt.unassembled = 1; 
+		ani_opt.v = 1;
+		break;
+	}
 	case 777:
 	{
 		ani_opt.pair = 1;
@@ -180,7 +191,7 @@ static error_t parse_ani(int key, char *arg, struct argp_state *state)
 
 		if (!ani_opt.pair && ani_opt.qrydir[0] == '\0')
 		{
-			printf("\nError: Mandatory options: '-q' are missing unless use mode '--pair'.\n\n");
+			printf("\nError: Mandatory options: '-q' or '--qraw' are missing unless use mode '--pair'.\n\n");
 			argp_state_help(state, stdout, ARGP_HELP_STD_HELP);
 			argp_usage(state);
 		}
@@ -231,14 +242,12 @@ int cmd_ani(struct argp_state *state)
 	state->next += argc - 1;
 	size_t file_size;
 
-		// instantilize distance fn according selection of naive model or not
+	// instantilize distance fn according selection of naive model or not
 	get_generic_dist_from_features = ani_opt.v ? get_naive_dist : lm3ways_dist_from_features;
 
 	if (ani_opt.qrydir[0] != '\0')
 	{
 		dim_sketch_stat_t *qry_dim_sketch_stat = read_from_file(test_get_fullpath(ani_opt.qrydir, sketch_stat), &file_size);
-		if (qry_dim_sketch_stat->conflict) //imply raw reads? which not trained in lm3ways_dist_from_features.  
-			get_generic_dist_from_features = get_naive_dist; 
 
 		const_comask_init(qry_dim_sketch_stat);
 		if (ani_opt.refdir[0] == '\0')

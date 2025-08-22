@@ -101,9 +101,10 @@ static inline ctxgidobj_t uint64_ctxobj2ctxgidobj96( uint64_t ctxobj64, uint32_t
 
 
 
-//coden aware context object pattern 
+//coden aware context object pattern
+// may set to >10 for unassembled data  
 #ifndef NUM_CODENS
-#define NUM_CODENS 9
+#define NUM_CODENS 9 
 #endif   
 static inline uint64_t generate_coden_pattern64 (){
     uint64_t pattern = 0;

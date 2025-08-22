@@ -36,7 +36,7 @@ double select_metrics_dist[5] = {1, 1, 1, 1, 1}; // default values
 #define BLOCK_SIZE (4096) // #of qry genomes per batch, for mem_eff handling
 int mem_eff_sorted_ctxgidobj_arrXcomb_sortedsketch64(ani_opt_t *ani_opt)
 {
-
+	
 	dim_sketch_stat_t *ref_dim_sketch_stat = read_from_file(test_get_fullpath(ani_opt->refdir, sketch_stat), &file_size);
 	int ref_infile_num = ref_dim_sketch_stat->infile_num;
 	// read index
@@ -895,8 +895,9 @@ void ani_block_print(
 			float af_qry = (float)ani_features.XnY_ctx / qry_sketch_size;
 			float af_ref = (float)ani_features.XnY_ctx / ref_sketch_size;
 			float min_af = af_qry < af_ref ? af_qry : af_ref;
+			float desision_af = ani_opt->unassembled? af_ref:min_af;
 
-			select_metrics_dist[0] = min_af < ani_opt->afcut ? ani_opt->e : get_generic_dist_from_features(&ani_features);
+			select_metrics_dist[0] = desision_af < ani_opt->afcut ? ani_opt->e : get_generic_dist_from_features(&ani_features);
 			select_metrics_dist[1] = get_mashD(Bitslen.ctx / 2, ref_sketch_size, qry_sketch_size, ani_features.XnY_ctx);
 			select_metrics_dist[2] = get_aafD(Bitslen.ctx / 2, ref_sketch_size, qry_sketch_size, ani_features.XnY_ctx);
 			select_metrics_dist[3] = min_af < ani_opt->afcut ? select_metrics_dist[1] : select_metrics_dist[0];
@@ -910,7 +911,7 @@ void ani_block_print(
 			{
 				fprintf(outfp, "\t%lf", metric);
 			}
-			else
+			else if (ani >= ani_opt->anicut )
 			{
 				fprintf(outfp, "%s\t%s\t%d\t%f\t%f\t%d\t%d\t%d\t%lf\t%lf\n",
 						qryfname[qry_gid], refname[j], ani_features.XnY_ctx, af_qry, af_ref,

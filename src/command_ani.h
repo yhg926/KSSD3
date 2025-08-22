@@ -18,6 +18,7 @@ typedef struct ani_opt
 	bool d;	   // diagnal
 	bool v;	   // naive model ?
 	bool pair; // pairwise compute
+	bool unassembled; // query sketch is unassembled;
 	int e;
 	int s; // select metrics;
 	float afcut;
@@ -127,6 +128,7 @@ size_t *kssd_find_first_occurrences_fenceposts(const uint64_t *a, size_t a_size,
 // inline functions
 // 1. 3-way linear model distance (see model_ani.h): static inline double lm3ways_dist_from_features(ani_features_t *features)
 // 2. naive distance: for where 3-way linear model is not applicable e.g. unassembled genomes , or Eukaryotic genomes?
+#define DIVIDOR (7)
 static inline double get_naive_dist(ani_features_t *features)
 {
 	if (features->XnY_ctx == 0)
@@ -134,7 +136,7 @@ static inline double get_naive_dist(ani_features_t *features)
 	double ratio = (double)(features->N_diff_obj_section + EPSILON) / (features->N_diff_obj + EPSILON);
 	double dist0 = (double)features->N_diff_obj / (features->XnY_ctx + features->N_diff_obj);
 	double final_dist = 1 - pow((1 - dist0), ratio);
-	return final_dist / 7; // 7 is experically determined;
+	return final_dist / DIVIDOR; // 7 is experically determined;
 }
 // 3. generic distance function from 1. or 2.
 typedef double (*get_generic_dist_from_features_fn)(ani_features_t *features);
@@ -256,6 +258,9 @@ static inline void count_ctx_obj_frm_comb_sketch_section(ctx_mut2_t *ctx, obj_se
 {
 	uint32_t nobjbits = Bitslen.obj;
 	uint64_t gidmask = UINT64_MAX >> (64 - GID_NBITS), objmask = (1UL << nobjbits) - 1;
+	float afcut = ani_opt->afcut;
+	float anicut = ani_opt->anicut;
+	bool unassembled = ani_opt->unassembled;
 	// for fencepost methods
 	int k = 17;
 	size_t buckets = (size_t)1u << k;
@@ -328,11 +333,11 @@ static inline void count_ctx_obj_frm_comb_sketch_section(ctx_mut2_t *ctx, obj_se
 			num_passid_block[i] = 0;
 			for (int j = 0; j < ref_gnum; j++)
 			{
-				if ((float)MCTX(ref_gnum, i, j).num_ctx / a_size < ani_opt->afcut)
+				if (!unassembled && (float)MCTX(ref_gnum, i, j).num_ctx / a_size < afcut)
 					continue;
-				float dist = (float)MOBJ(ref_gnum, i, j).diff_obj / MCTX(ref_gnum, i, j).num_ctx;
+				float dist = (float)MOBJ(ref_gnum, i, j).diff_obj / MCTX(ref_gnum, i, j).num_ctx / DIVIDOR;
 				float ani = 1 - dist;
-				if (ani < ani_opt->anicut)
+				if (ani < anicut)
 					continue;
 				sort_idani_block[i][num_passid_block[i]].id = j;
 				sort_idani_block[i][num_passid_block[i]].ani = ani;
