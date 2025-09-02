@@ -23,18 +23,31 @@ void print_lco_gnames(set_opt_t* set_opt){
 }
 
 void show_content(set_opt_t* set_opt){
-	FILE *fp; uint64_t kmer; ctxgidobj_t ctxgidobj;
+	FILE *fp,*fab; uint64_t kmer; uint32_t abun; ctxgidobj_t ctxgidobj;
+	bool abundance = 0;
 	if(set_opt->show == 1) {
 		uint64_t *sketch_index = read_from_file( test_get_fullpath(set_opt->insketchpath,idx_sketch_suffix) , &file_size);
 		int infile_num = file_size/sizeof(uint64_t) - 1;	
 		if((fp=fopen(test_get_fullpath(set_opt->insketchpath,combined_sketch_suffix),"rb")) == NULL) 
 			err(EXIT_FAILURE, "%s(): Failed to open file '%s/%s'", __func__, set_opt->insketchpath,combined_sketch_suffix);
+		
+		if(file_exists_in_folder(set_opt->insketchpath,combined_ab_suffix)){			
+			if((fab=fopen(test_get_fullpath(set_opt->insketchpath,combined_ab_suffix),"rb")) == NULL) 
+				err(EXIT_FAILURE, "%s(): Failed to open file '%s/%s'", __func__, set_opt->insketchpath,combined_ab_suffix);
+			abundance = 1;	
+		}
+
 		for(int i = 0 ; i< infile_num;i++){
 			for(uint64_t j = sketch_index[i]; j < sketch_index[i+1]; j++ ){
-			fread(&kmer,sizeof(kmer),1,fp); printf("%d\t%lx\n",i,kmer);
+				fread(&kmer,sizeof(kmer),1,fp); 
+				if(abundance) {
+					fread(&abun,sizeof(abun),1,fab);
+					printf("%d\t%lx\t%u\n",i,kmer,abun);					
+				}else printf("%d\t%lx\n",i,kmer);
 			}
+
 		}
-		free(sketch_index);	
+		free(sketch_index);			
 	}
 	else if (set_opt->show == 2){
 		if((fp=fopen(test_get_fullpath(set_opt->insketchpath,sorted_comb_ctxgid64obj32),"rb")) == NULL)
@@ -45,6 +58,7 @@ void show_content(set_opt_t* set_opt){
 	}
 	else err(EXIT_FAILURE, "%s(): only set_opt.show values 1 and 2 are supported, set_opt.show =%d", __func__, set_opt->show);
 	fclose(fp);
+	if(abundance) fclose(fab);
 }
 
 KHASH_MAP_INIT_INT64(kmer_hash, int)
