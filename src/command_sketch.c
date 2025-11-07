@@ -1449,10 +1449,11 @@ static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_t
         for (int t=0;t<nth;++t) v_init(&V_thr[t], 1u<<15);
 
         // 1) collect (mmap for plain; kseq for .gz)
-        if (!has_suffix(path, ".gz"))
-            collect_plain_mmap_into_vectors(path, nth, opt->p, V_thr, ctxmask, tupmask, Bitslen.obj, klen);
-        else
+        if (isCompressfile((char*)path) || isOK_fmt_infile((char*)path, fasta_fmt, FAS_FMT_SZ))
             collect_gz_into_vectors(path, nth, opt->p, V_thr, ctxmask, tupmask, Bitslen.obj, klen, BATCH_READS);
+        else // collect_plain_mmap_into_vectors() only for plain FASTQ not fast
+            collect_plain_mmap_into_vectors(path, nth, opt->p, V_thr, ctxmask, tupmask, Bitslen.obj, klen);
+        
 
         // 2) finalize once (shared shrink + bucketed merge)
         SortedKV_Arrays_t kv = finalize_vectors_bucketed(V_thr, nth, opt->p);
