@@ -1045,7 +1045,8 @@ static inline void load_genome_into_single_vec(char *path,u64vec *vec,uint64_t c
 static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, int batch_size)
 {
     const int nfiles = tab->infile_num;
-    const bool has_abundance = opt->abundance;
+    const int kmerocrs = opt->kmerocrs;              
+    const bool has_abundance = opt->abundance ;
 
     FILE *comb = fopen(format_string("%s/%s", opt->outdir, combined_sketch_suffix), "wb");
     if (!comb) err(errno, "%s() open file error: %s/%s", __func__, opt->outdir, combined_sketch_suffix);
@@ -1088,7 +1089,9 @@ static void sketch_many_files_in_parallel(sketch_opt_t *opt, infile_tab_t *tab, 
             load_genome_into_single_vec(fpath, &vec, ctxmask, tupmask, Bitslen.obj, klen);
 
             if (vec.n) {
-                SortedKV_Arrays_t kv = build_kv_from_vec(&vec, has_abundance);
+                SortedKV_Arrays_t kv = build_kv_from_vec(&vec, has_abundance || (kmerocrs > 1) );
+                if(kmerocrs > 1) // filter by min ocrs
+                    filter_n_SortedKV_Arrays(&kv, kmerocrs);
                 if (!opt->conflict){
                     if(has_abundance) remove_ctx_with_conflict_obj(&kv, Bitslen.obj);
                     else remove_ctx_with_conflict_obj_noabund (kv.keys, &(kv.len), Bitslen.obj);
@@ -1424,7 +1427,7 @@ static inline void write_index_payload_and_free(FILE *comb, FILE *comb_ab,
 static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_tab_t *tab, int BATCH_READS)
 {
     const int nfiles = tab->infile_num;
-
+    const int kmerocrs = opt->kmerocrs;
     FILE *comb = fopen(format_string("%s/%s", opt->outdir, combined_sketch_suffix), "wb");
     if (!comb) err(errno, "%s() open file error: %s/%s", __func__, opt->outdir, combined_sketch_suffix);
     setvbuf(comb, NULL, _IOFBF, 8u << 20);
@@ -1457,7 +1460,8 @@ static void sketch_few_files_with_intrafile_parallel(sketch_opt_t *opt, infile_t
 
         // 2) finalize once (shared shrink + bucketed merge)
         SortedKV_Arrays_t kv = finalize_vectors_bucketed(V_thr, nth, opt->p);
-
+        if(kmerocrs > 1) // filter by min ocrs
+                    filter_n_SortedKV_Arrays(&kv, kmerocrs);
         // 3) conflict filter + 4) write
         if (kv.len){
             if (!opt->conflict){
