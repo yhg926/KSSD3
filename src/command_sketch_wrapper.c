@@ -284,7 +284,7 @@ int cmd_sketch(struct argp_state *state)
       /* conditionally initilize some comblco_stat_one members*/
       if(sketch_opt.coden_ctxobj_pattern){
         hash_id = get_sketching_id(NUM_CODENS,0,0,sketch_opt.drfold, FILTER);
-        klen = 3 * NUM_CODENS + 1; // klen is 3*NUM_CODENS+1
+        klen = NUM_CODENS < 11 ? 3 * NUM_CODENS + 1 : 32  ; // klen is 3*NUM_CODENS+1 only when NUM_CODENS <=10
         comblco_stat_one.coden_len = NUM_CODENS; // set coden_len
         comblco_stat_one.hclen = 0;
         comblco_stat_one.holen = 0;
@@ -295,8 +295,8 @@ int cmd_sketch(struct argp_state *state)
         comblco_stat_one.hclen = sketch_opt.hclen;
         comblco_stat_one.holen = sketch_opt.holen;
       }
-      if (klen > 32 || FILTER < 256)
-        err(EINVAL, "%s(): klen (%d) or FILTER (%u) is out of range (klen <=32 and FILTER: 256..0xffffffff)", __func__, klen, FILTER);
+      if (NUM_CODENS > 11 || klen > 32 || FILTER < 256)
+        err(EINVAL, "%s(): NUM_CODENS(%d) or klen (%d) or FILTER (%u) is out of range (NUM_CODENS <=11 and klen <=32 and FILTER: 256..0xffffffff)", __func__, NUM_CODENS, klen, FILTER);
 
       printf("Sketching method hashid = %u\tctxobj_coden_len=%u\tklen=%u\tFILTER=%u\thclen=%d\n", hash_id, comblco_stat_one.coden_len, klen, FILTER, comblco_stat_one.hclen);
       { /*initilize the rest comblco_stat_one member*/

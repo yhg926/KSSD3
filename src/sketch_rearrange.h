@@ -104,13 +104,19 @@ static inline ctxgidobj_t uint64_ctxobj2ctxgidobj96( uint64_t ctxobj64, uint32_t
 //coden aware context object pattern
 // may set to >10 for unassembled data  
 #ifndef NUM_CODENS
-#define NUM_CODENS 9 
+#define NUM_CODENS 11 
 #endif   
 static inline uint64_t generate_coden_pattern64 (){
     uint64_t pattern = 0;
-    for (int i = 0; i < NUM_CODENS; ++i) {
+    for (int i = 0; i < NUM_CODENS ; ++i) {
         pattern <<= 6;
-        pattern |= 0b111100;    
+        pattern |= 0b111100;   
+        // in case of NUM_CODENS >= 11
+        if(i == 10){
+            pattern <<= 4;
+            pattern |= 0b1111;
+            break;
+        }
     }
     return pattern;
 }
@@ -146,6 +152,7 @@ static inline uint64_t reorder_unituple_by_coden_pattern64 (uint64_t unituple) {
     }
     return (high << 2*(NUM_CODENS+1)) | low; // Combine high and low parts
 }
+
 
 
 typedef uint64_t (*uint64kmer2generic_ctxobj_fn)(uint64_t); 
