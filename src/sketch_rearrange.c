@@ -80,7 +80,6 @@ ctxgidobj_t *ctxobj64_2ctxgidobj(uint64_t *sketch_index, uint64_t *ctxobj64, int
 uint64kmer2generic_ctxobj_fn uint64kmer2generic_ctxobj = NULL;
 void set_uint64kmer2generic_ctxobj(bool is_coden_ctxobj_pattern)
 {
-    if(NUM_CODENS > 10)
-        printf("warning: %s() initialization failed due to NUM_CODENS(%d) is out of range (NUM_CODENS <=11) ", __func__, NUM_CODENS);
+    
     uint64kmer2generic_ctxobj = is_coden_ctxobj_pattern ? reorder_unituple_by_coden_pattern64 : uint64_kmer2ctxobj;
 }
