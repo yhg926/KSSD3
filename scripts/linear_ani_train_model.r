@@ -1,5 +1,5 @@
 setwd("/mnt/sdb/data/kssd3ani_project/ANIu_vs_kssd3/same_species")
-Nayfach3<-read.table("Nayfach52k.kssd3_codenpattern_vs_ANIm",header=T)
+Nayfach3<-read.table("Nayfach52k.kssd3_codenpatternT11_vs_ANIm",header=T)
 Nayfach3<-Nayfach3[,c(3:10)]
 Nayfach3$y=1-Nayfach3$ANIm
 Nayfach3$naive_d = (1-(1-Nayfach3$N_diff_obj/(Nayfach3$XnY_ctx+Nayfach3$N_diff_obj))^((Nayfach3$N_diff_obj_section +1e-8)/(Nayfach3$N_diff_obj+1e-8)))/7
@@ -108,9 +108,9 @@ abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
 
 #### write-out parameters:
 # Output file
-outfile <- "model_coeffs_easy9.tsv"
+outfile <- "T11model_coeffs_easy.tsv"
 # Generate names
-opt_param_values <- opt_result9$par
+opt_param_values <- opt_result$par
 model_coeffs <- coef(final_model9)
 model_coeff_names <- names(model_coeffs)
 model_coeff_values <- as.numeric(model_coeffs)

@@ -93,8 +93,9 @@ static inline uint64_t make_ctxobj_bmi2(uint64_t unituple, uint64_t tuplemask, u
 // ====================== BASELINE: portable fallback path ======================
 __attribute__((always_inline))
 static inline uint64_t make_ctxobj_baseline(uint64_t unituple){
-    if(NUM_CODENS > 10)
+#if NUM_CODENS > 10
         printf("warning: %s() initialization failed due to NUM_CODENS(%d) is out of range (NUM_CODENS <=11) ", __func__, NUM_CODENS);
+#endif
     return uint64kmer2generic_ctxobj(unituple );
 }
 

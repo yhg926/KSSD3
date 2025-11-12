@@ -1,27 +1,42 @@
 #ifndef MODEL_ANI_H
 #define MODEL_ANI_H
 
-// model 1: 3-way linear model parameters (NUM_CODENS==9 only)
+#include "sketch_rearrange.h"
+
+// model 1: 3-way linear model parameters
 
 // optimized parameters for 3 denominator of 3-way linear model
 static const double opt_denom_params4x3[12] =
     {
+#if (NUM_CODENS == 9 || NUM_CODENS == 10)
         1.0090536851341, 1.0013604061893, 1.03540226374509, 1.04270754727088, // denom1
         1.0108940845453, 1.0010797461052, 0.98914550652945, 1.01536320288592, // denom2
         1.0061957741437, 0.9957814716168, 0.98352379677340, 1.00951820561544  // denom3
+#elif (NUM_CODENS == 11)
+        1.0178887, 1.0135146, 1.0302181, 1.1205122, // denom1
+        1.0136223, 0.9803396, 1.0021964, 0.9839395, // denom2
+        0.9988935, 0.9690589, 0.9888171, 0.9817371  // denom3
+#endif
 };
 // ANI>95 subset parameters
 static const double N95opt_denom_params4x3[12] =
-    {
+{
+#if (NUM_CODENS == 9 || NUM_CODENS == 10)
         1.0196821174688, 0.9817771341602, 1.04637038371202, 1.02441485561367, // denom1
         1.0163855061091, 0.9824051281495, 1.04908985213703, 1.01102197270052, // denom2
         1.0074050784795, 1.0018402553389, 0.94654127396428, 0.94051319172603  // denom3
+#elif (NUM_CODENS == 11)        
+        1.0145656, 1.2708196, 1.2169829, 0.3904416,  // denom1
+        0.8147527, 1.3389150, 2.0581364, -1.4624736, // denom2
+        1.6877678, 2.4390067, 0.7878482, 0.6697437   // denom3
+#endif     
 };
 
 //  3-way linear model coefficients
 static const double linear_coeffs_3way_9CODENs[17] =
     {
-        -0.587100397752123,    // (Intercept)
+#if (NUM_CODENS == 9 || NUM_CODENS == 10)
+         -0.587100397752123,    // (Intercept)
         -7.93027271403258e-08, // XnY_ctx
         4.98481429879899e-06,  // N_diff_obj_section
         -1.63903694463017e-05, // N_mut2_ctx
@@ -38,10 +53,30 @@ static const double linear_coeffs_3way_9CODENs[17] =
         -45398.423188085,      // XnY_ctx:denom3
         -46461.4920783106,     // N_diff_obj_section:denom3
         35045.3583333325,      // N_mut2_ctx:denom3
+#elif (NUM_CODENS == 11)
+        6.86905236142636,      // (Intercept)
+        -5.85271800517096e-08, // XnY_ctx
+        7.43351941016881e-06,  // N_diff_obj_section
+        -1.95859228059721e-05, // N_mut2_ctx
+        -8.44336369105416e-06, // N_diff_obj
+        -11726.5478433625,     // denom1
+        -111109.682632437,     // denom2
+        121000.895632267,      // denom3
+        -741.538955661909,     // XnY_ctx:denom1
+        -1894.53741972785,     // N_diff_obj_section:denom1
+        2585.81964981999,      // N_mut2_ctx:denom1
+        -7744.5216892858,      // XnY_ctx:denom2
+        -18190.2514369096,     // N_diff_obj_section:denom2
+        23306.3090989115,      // N_mut2_ctx:denom2
+        8352.82760552325,      // XnY_ctx:denom3
+        19782.4294837312,      // N_diff_obj_section:denom3
+        -25518.2493259614,     // N_mut2_ctx:denom3
+#endif
 };
 // ANI>95 subset of 3-way linear model coefficients
 static const double N95linear_coeffs_3way_9CODENs[17] =
     {
+#if (NUM_CODENS == 9 || NUM_CODENS == 10)
         10.7394186800999,      // (Intercept)
         -2.92835943410177e-08, // XnY_ctx
         1.66112325940088e-05,  // N_diff_obj_section
@@ -59,9 +94,90 @@ static const double N95linear_coeffs_3way_9CODENs[17] =
         -3669.6748819999,      // XnY_ctx:denom3
         -4909.59256464219,     // N_diff_obj_section:denom3
         -5653.59698386914,     // N_mut2_ctx:denom3
+#elif (NUM_CODENS == 11)
+        -1.69173585242774,     // (Intercept)
+        -3.64716315423252e-08, // XnY_ctx
+        2.85880264052975e-05,  // N_diff_obj_section
+        -5.5597924264054e-05,  // N_mut2_ctx
+        -2.96208613804271e-05, // N_diff_obj
+        1106.96550282022,      // denom1
+        -83.197177767225,      // denom2
+        -1671.88720051458,     // denom3
+        152.75590068948,       // XnY_ctx:denom1
+        212.734805232395,      // N_diff_obj_section:denom1
+        208.388739816682,      // N_mut2_ctx:denom1
+        -0.27860125939004,     // XnY_ctx:denom2
+        2.27065806912198,      // N_diff_obj_section:denom2
+        -10.2977013026837,     // N_mut2_ctx:denom2
+        -250.681324281127,     // XnY_ctx:denom3
+        -403.751360812353,     // N_diff_obj_section:denom3
+        -137.96628693833,      // N_mut2_ctx:denom3
+#endif
 
 };
+/*
+//--------------------------------------------------------------//
+// model 1: 3-way linear model parameters (NUM_CODENS==11 only)
 
+// optimized parameters for 3 denominator of 3-way linear model
+static const double T11opt_denom_params4x3[12] =
+    {
+        1.0178887, 1.0135146, 1.0302181, 1.1205122, // denom1
+        1.0136223, 0.9803396, 1.0021964, 0.9839395, // denom2
+        0.9988935, 0.9690589, 0.9888171, 0.9817371  // denom3
+};
+// ANI>95 subset parameters
+static const double T11N95opt_denom_params4x3[12] =
+    {
+        1.0145656, 1.2708196, 1.2169829, 0.3904416,  // denom1
+        0.8147527, 1.3389150, 2.0581364, -1.4624736, // denom2
+        1.6877678, 2.4390067, 0.7878482, 0.6697437   // denom3
+};
+
+//  3-way linear model coefficients
+static const double linear_coeffs_3way_11CODENs[17] =
+    {
+        6.86905236142636,      // (Intercept)
+        -5.85271800517096e-08, // XnY_ctx
+        7.43351941016881e-06,  // N_diff_obj_section
+        -1.95859228059721e-05, // N_mut2_ctx
+        -8.44336369105416e-06, // N_diff_obj
+        -11726.5478433625,     // denom1
+        -111109.682632437,     // denom2
+        121000.895632267,      // denom3
+        -741.538955661909,     // XnY_ctx:denom1
+        -1894.53741972785,     // N_diff_obj_section:denom1
+        2585.81964981999,      // N_mut2_ctx:denom1
+        -7744.5216892858,      // XnY_ctx:denom2
+        -18190.2514369096,     // N_diff_obj_section:denom2
+        23306.3090989115,      // N_mut2_ctx:denom2
+        8352.82760552325,      // XnY_ctx:denom3
+        19782.4294837312,      // N_diff_obj_section:denom3
+        -25518.2493259614,     // N_mut2_ctx:denom3
+};
+// ANI>95 subset of 3-way linear model coefficients
+static const double N95linear_coeffs_3way_11CODENs[17] =
+    {
+        -1.69173585242774,     // (Intercept)
+        -3.64716315423252e-08, // XnY_ctx
+        2.85880264052975e-05,  // N_diff_obj_section
+        -5.5597924264054e-05,  // N_mut2_ctx
+        -2.96208613804271e-05, // N_diff_obj
+        1106.96550282022,      // denom1
+        -83.197177767225,      // denom2
+        -1671.88720051458,     // denom3
+        152.75590068948,       // XnY_ctx:denom1
+        212.734805232395,      // N_diff_obj_section:denom1
+        208.388739816682,      // N_mut2_ctx:denom1
+        -0.27860125939004,     // XnY_ctx:denom2
+        2.27065806912198,      // N_diff_obj_section:denom2
+        -10.2977013026837,     // N_mut2_ctx:denom2
+        -250.681324281127,     // XnY_ctx:denom3
+        -403.751360812353,     // N_diff_obj_section:denom3
+        -137.96628693833,      // N_mut2_ctx:denom3
+
+};
+*/
 typedef struct
 {
     uint32_t XnY_ctx;
@@ -101,14 +217,17 @@ static inline double lm3ways_dist_from_features_core(ani_features_t *features, c
 // 2. 3-ways linear model distance
 static inline double lm3ways_dist_from_features(ani_features_t *features)
 {
-    if (features-> XnY_ctx == 0) return 1; // if no ctx, return 1
-    else if (features->N_diff_obj == 0) return 0; // if no diff obj, return 0
-    // use optimized parameters lm prediction     
+    if (features->XnY_ctx == 0)
+        return 1; // if no ctx, return 1
+    else if (features->N_diff_obj == 0)
+        return 0; // if no diff obj, return 0
+    // use optimized parameters lm prediction
     double dist = lm3ways_dist_from_features_core(features, opt_denom_params4x3, linear_coeffs_3way_9CODENs);
-    if (dist < 0.05) dist = lm3ways_dist_from_features_core(features, N95opt_denom_params4x3, N95linear_coeffs_3way_9CODENs);
-    if (dist < 0) dist = 0;
+    if (dist < 0.05)
+        dist = lm3ways_dist_from_features_core(features, N95opt_denom_params4x3, N95linear_coeffs_3way_9CODENs);
+    if (dist < 0)
+        dist = 0;
     return dist;
 }
-
 
 #endif
