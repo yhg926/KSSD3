@@ -124,10 +124,13 @@ size_t *kssd_find_first_occurrences_fenceposts(const uint64_t *a, size_t a_size,
                                                const ctxgidobj_t *b, size_t b_size,
                                                const size_t *F, int k, unsigned nobjbits);
 
-#endif /* KSSD_FENCEPOSTS_H */	
+#endif /* KSSD_FENCEPOSTS_H */
+
+
 // inline functions
 // 1. 3-way linear model distance (see model_ani.h): static inline double lm3ways_dist_from_features(ani_features_t *features)
 // 2. naive distance: for where 3-way linear model is not applicable e.g. unassembled genomes , or Eukaryotic genomes?
+
 #define DIVIDOR (7)
 static inline double get_naive_dist(ani_features_t *features)
 {
@@ -136,8 +139,17 @@ static inline double get_naive_dist(ani_features_t *features)
 	double ratio = (double)(features->N_diff_obj_section + EPSILON) / (features->N_diff_obj + EPSILON);
 	double dist0 = (double)features->N_diff_obj / (features->XnY_ctx + features->N_diff_obj);
 	double final_dist = 1 - pow((1 - dist0), ratio);
-	return final_dist / DIVIDOR; // 7 is experically determined;
+	if(	final_dist <= 0)
+		return 0;
+
+#if NUM_CODENS < 11   //9 or 10
+	double predict_dist = final_dist * (0.1557143) + (9.961e-5);  // 0.1557143 ~ 1/7
+#else 
+	double predict_dist = final_dist * (0.1544286) + (7.133e-4); 
+#endif
+	return predict_dist;
 }
+
 // 3. generic distance function from 1. or 2.
 typedef double (*get_generic_dist_from_features_fn)(ani_features_t *features);
 extern get_generic_dist_from_features_fn get_generic_dist_from_features;

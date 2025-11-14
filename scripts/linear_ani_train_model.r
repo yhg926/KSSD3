@@ -80,18 +80,22 @@ predictions9 <- predict(final_model9, newdata = Nayfach9)
 cor(predictions9,Nayfach9$y)
 cor(Nayfach9$naive_d,Nayfach9$y)
 plot(predictions9,Nayfach9$y)
-plot(Nayfach9$naive_d,Nayfach9$y)
+cor(Nayfach$naive_d,Nayfach$y)
+
+naive_model<-lm(Nayfach$y ~ Nayfach$naive_d )
+naive_predictions <- predict(naive_model, newdata = Nayfach)
+plot(naive_predictions, Nayfach$y)
 
 abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
 
 ###test_model
-test<-read.table("Neisseria_meningitidis.kssd3_codenpattern4",header=T)
+test<-read.table("tmp.out",header=T)
 test<-test[,c(3:10)]
 #names(test)=header
 #test$y=1-test$ANIm
 test$y=1-test$ANIu/100  
 #test <- Nayfach9
-pt<-p
+pt<-p9
 
 test$denom1 <- 1 / (pt[1] * test$XnY_ctx + pt[2] * test$N_diff_obj_section + pt[3] * test$N_mut2_ctx + pt[4] * test$N_diff_obj + epsilon)
 test$denom2 <- 1 / (pt[5] * test$XnY_ctx + pt[6] * test$N_diff_obj_section + pt[7] * test$N_mut2_ctx + pt[8] * test$N_diff_obj + epsilon)
@@ -103,7 +107,7 @@ cor(final_predictions,test$y)
 final_predictions9 <- predict(final_model9, newdata = test)
 cor(final_predictions9,test$y)
 
-plot(final_predictions,test$y)
+plot(final_predictions9,test$y)
 abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
 
 #### write-out parameters:
@@ -111,7 +115,7 @@ abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
 outfile <- "T11model_coeffs_easy.tsv"
 # Generate names
 opt_param_values <- opt_result$par
-model_coeffs <- coef(final_model9)
+model_coeffs <- coef(final_model)
 model_coeff_names <- names(model_coeffs)
 model_coeff_values <- as.numeric(model_coeffs)
 # Write to file

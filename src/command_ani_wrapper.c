@@ -271,7 +271,12 @@ int cmd_ani(struct argp_state *state)
 	{
 		// initializing
 		dim_sketch_stat_t lco_stat_val;
-		lco_stat_val.klen = 3 * NUM_CODENS + 1; // klen is 3*NUM_CODENS+1
+#if NUM_CODENS < 11
+	lco_stat_val.klen = 3 * NUM_CODENS + 1; // klen is 3*NUM_CODENS+1
+#else
+	lco_stat_val.klen = 32 ;
+#endif	
+	//lco_stat_val.klen = 3 * NUM_CODENS + 1; // klen is 3*NUM_CODENS+1
 		lco_stat_val.coden_len = NUM_CODENS;
 		const_comask_init(&lco_stat_val);
 

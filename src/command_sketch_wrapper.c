@@ -284,7 +284,12 @@ int cmd_sketch(struct argp_state *state)
       /* conditionally initilize some comblco_stat_one members*/
       if(sketch_opt.coden_ctxobj_pattern){
         hash_id = get_sketching_id(NUM_CODENS,0,0,sketch_opt.drfold, FILTER);
-        klen = NUM_CODENS < 11 ? 3 * NUM_CODENS + 1 : 32  ; // klen is 3*NUM_CODENS+1 only when NUM_CODENS <=10
+#if NUM_CODENS < 11
+        klen = 3 * NUM_CODENS + 1 ; // klen is 3*NUM_CODENS+1
+#else
+        klen = 32 ;
+#endif
+//  klen = NUM_CODENS < 11 ? 3 * NUM_CODENS + 1 : 32  ; // klen is 3*NUM_CODENS+1 only when NUM_CODENS <=10
         comblco_stat_one.coden_len = NUM_CODENS; // set coden_len
         comblco_stat_one.hclen = 0;
         comblco_stat_one.holen = 0;
