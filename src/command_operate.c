@@ -5,274 +5,309 @@
 #include "../klib/khash.h"
 #include <stdint.h>
 
-const char lpan_prefix[]="lpan"; //uint64_t pan
-const char luniq_pan_prefix[]="luniq_pan";
+const char lpan_prefix[] = "lpan"; // uint64_t pan
+const char luniq_pan_prefix[] = "luniq_pan";
 // common vars
-static size_t file_size; 
-static dim_sketch_stat_t lco_stat_readin, lco_stat_pan, lco_stat_origin ;
+static size_t file_size;
+static dim_sketch_stat_t lco_stat_readin, lco_stat_pan, lco_stat_origin;
 static struct stat s;
-static char outfpath[PATHLEN+20];
+static char outfpath[PATHLEN + 20];
 static int ret;
 extern const char sorted_comb_ctxgid64obj32[];
-void print_lco_gnames(set_opt_t* set_opt){
-	void *mem_stat = read_from_file( test_get_fullpath(set_opt->insketchpath,sketch_stat) , &file_size);
-	memcpy(&lco_stat_readin,mem_stat,sizeof(lco_stat_readin));	char (*tmpname)[PATHLEN] = mem_stat+sizeof(dim_sketch_stat_t);
-	uint64_t *mem_index = (uint64_t *)read_from_file( test_get_fullpath(set_opt->insketchpath,idx_sketch_suffix) , &file_size);
-	for(int i = 0 ; i<lco_stat_readin.infile_num ; i++) printf("%lu\t%s\n",mem_index[i+1]-mem_index[i],tmpname[i]);
-	free_all(mem_stat,mem_index,NULL)	;
+void print_lco_gnames(set_opt_t *set_opt)
+{
+	void *mem_stat = read_from_file(test_get_fullpath(set_opt->insketchpath, sketch_stat), &file_size);
+	memcpy(&lco_stat_readin, mem_stat, sizeof(lco_stat_readin));
+	char (*tmpname)[PATHLEN] = mem_stat + sizeof(dim_sketch_stat_t);
+	uint64_t *mem_index = (uint64_t *)read_from_file(test_get_fullpath(set_opt->insketchpath, idx_sketch_suffix), &file_size);
+	for (int i = 0; i < lco_stat_readin.infile_num; i++)
+		printf("%lu\t%s\n", mem_index[i + 1] - mem_index[i], tmpname[i]);
+	free_all(mem_stat, mem_index, NULL);
 }
 
-void show_content(set_opt_t* set_opt){
-	FILE *fp,*fab; uint64_t kmer; uint32_t abun; ctxgidobj_t ctxgidobj;
+void show_content(set_opt_t *set_opt)
+{
+	FILE *fp, *fab;
+	uint64_t kmer;
+	uint32_t abun;
+	ctxgidobj_t ctxgidobj;
 	bool abundance = 0;
-	if(set_opt->show == 1) {
-		uint64_t *sketch_index = read_from_file( test_get_fullpath(set_opt->insketchpath,idx_sketch_suffix) , &file_size);
-		int infile_num = file_size/sizeof(uint64_t) - 1;	
-		if((fp=fopen(test_get_fullpath(set_opt->insketchpath,combined_sketch_suffix),"rb")) == NULL) 
-			err(EXIT_FAILURE, "%s(): Failed to open file '%s/%s'", __func__, set_opt->insketchpath,combined_sketch_suffix);
-		
-		if(file_exists_in_folder(set_opt->insketchpath,combined_ab_suffix)){			
-			if((fab=fopen(test_get_fullpath(set_opt->insketchpath,combined_ab_suffix),"rb")) == NULL) 
-				err(EXIT_FAILURE, "%s(): Failed to open file '%s/%s'", __func__, set_opt->insketchpath,combined_ab_suffix);
-			abundance = 1;	
+	if (set_opt->show == 1)
+	{
+		uint64_t *sketch_index = read_from_file(test_get_fullpath(set_opt->insketchpath, idx_sketch_suffix), &file_size);
+		int infile_num = file_size / sizeof(uint64_t) - 1;
+		if ((fp = fopen(test_get_fullpath(set_opt->insketchpath, combined_sketch_suffix), "rb")) == NULL)
+			err(EXIT_FAILURE, "%s(): Failed to open file '%s/%s'", __func__, set_opt->insketchpath, combined_sketch_suffix);
+
+		if (file_exists_in_folder(set_opt->insketchpath, combined_ab_suffix))
+		{
+			if ((fab = fopen(test_get_fullpath(set_opt->insketchpath, combined_ab_suffix), "rb")) == NULL)
+				err(EXIT_FAILURE, "%s(): Failed to open file '%s/%s'", __func__, set_opt->insketchpath, combined_ab_suffix);
+			abundance = 1;
 		}
 
-		for(int i = 0 ; i< infile_num;i++){
-			for(uint64_t j = sketch_index[i]; j < sketch_index[i+1]; j++ ){
-				fread(&kmer,sizeof(kmer),1,fp); 
-				if(abundance) {
-					fread(&abun,sizeof(abun),1,fab);
-					printf("%d\t%lx\t%u\n",i,kmer,abun);					
-				}else printf("%d\t%lx\n",i,kmer);
+		for (int i = 0; i < infile_num; i++)
+		{
+			for (uint64_t j = sketch_index[i]; j < sketch_index[i + 1]; j++)
+			{
+				fread(&kmer, sizeof(kmer), 1, fp);
+				if (abundance)
+				{
+					fread(&abun, sizeof(abun), 1, fab);
+					printf("%d\t%lx\t%u\n", i, kmer, abun);
+				}
+				else
+					printf("%d\t%lx\n", i, kmer);
 			}
-
 		}
-		free(sketch_index);			
+		free(sketch_index);
 	}
-	else if (set_opt->show == 2){
-		if((fp=fopen(test_get_fullpath(set_opt->insketchpath,sorted_comb_ctxgid64obj32),"rb")) == NULL)
-            err(EXIT_FAILURE, "%s(): Failed to open file '%s/%s'", __func__, set_opt->insketchpath,sorted_comb_ctxgid64obj32);
-		while(!feof(fp)){
-			fread(&ctxgidobj,sizeof(ctxgidobj),1,fp);  printf("%lx\t%x\n",ctxgidobj.ctxgid,ctxgidobj.obj);
+	else if (set_opt->show == 2)
+	{
+		if ((fp = fopen(test_get_fullpath(set_opt->insketchpath, sorted_comb_ctxgid64obj32), "rb")) == NULL)
+			err(EXIT_FAILURE, "%s(): Failed to open file '%s/%s'", __func__, set_opt->insketchpath, sorted_comb_ctxgid64obj32);
+		while (!feof(fp))
+		{
+			fread(&ctxgidobj, sizeof(ctxgidobj), 1, fp);
+			printf("%lx\t%x\n", ctxgidobj.ctxgid, ctxgidobj.obj);
 		}
 	}
-	else err(EXIT_FAILURE, "%s(): only set_opt.show values 1 and 2 are supported, set_opt.show =%d", __func__, set_opt->show);
+	else
+		err(EXIT_FAILURE, "%s(): only set_opt.show values 1 and 2 are supported, set_opt.show =%d", __func__, set_opt->show);
 	fclose(fp);
-	if(abundance) fclose(fab);
+	if (abundance)
+		fclose(fab);
 }
 
 KHASH_MAP_INIT_INT64(kmer_hash, int)
 
-int lsketch_union(set_opt_t* set_opt){ // for both union and uniq union
+int lsketch_union(set_opt_t *set_opt)
+{ // for both union and uniq union
 
-	void *mem_stat = read_from_file( test_get_fullpath(set_opt->insketchpath,sketch_stat) , &file_size);
-	memcpy(&lco_stat_readin,mem_stat,sizeof(lco_stat_readin));
-  	if(lco_stat_readin.infile_num == 1){ // no need create 
-    	printf("only 1 sketch, use %s as pan-sketch?(Y/N)\n",set_opt->insketchpath);
-    	char inpbuff; scanf(" %c", &inpbuff);
-    	if ( (inpbuff == 'Y') || (inpbuff == 'y') ) {
-      		chdir(set_opt->insketchpath);
-      		if(rename(combined_sketch_suffix,lpan_prefix) !=0)  err(errno,"lsketch_union()");
-      		printf("the union directory: %s created successfully\n", set_opt->insketchpath) ;
-      	return 1;
-    	}
-  	}
- 	write_to_file(test_create_fullpath(set_opt->outdir,sketch_stat), mem_stat,file_size);
-//union operation
-	uint64_t *mem_comblco = (uint64_t *)read_from_file( test_get_fullpath(set_opt->insketchpath,combined_sketch_suffix) , &file_size);
-	uint32_t in_kmer_ct = file_size/sizeof(mem_comblco[0]);
-	khash_t(kmer_hash) *h = kh_init(kmer_hash); //kh_init_size(kmer_hash, (float)in_kmer_ct * 1.66 );
-	for(uint32_t i = 0; i< in_kmer_ct; i++){
+	void *mem_stat = read_from_file(test_get_fullpath(set_opt->insketchpath, sketch_stat), &file_size);
+	memcpy(&lco_stat_readin, mem_stat, sizeof(lco_stat_readin));
+	if (lco_stat_readin.infile_num == 1)
+	{ // no need create
+		printf("only 1 sketch, use %s as pan-sketch?(Y/N)\n", set_opt->insketchpath);
+		char inpbuff;
+		scanf(" %c", &inpbuff);
+		if ((inpbuff == 'Y') || (inpbuff == 'y'))
+		{
+			chdir(set_opt->insketchpath);
+			if (rename(combined_sketch_suffix, lpan_prefix) != 0)
+				err(errno, "lsketch_union()");
+			printf("the union directory: %s created successfully\n", set_opt->insketchpath);
+			return 1;
+		}
+	}
+	write_to_file(test_create_fullpath(set_opt->outdir, sketch_stat), mem_stat, file_size);
+	// union operation
+	uint64_t *mem_comblco = (uint64_t *)read_from_file(test_get_fullpath(set_opt->insketchpath, combined_sketch_suffix), &file_size);
+	uint32_t in_kmer_ct = file_size / sizeof(mem_comblco[0]);
+	khash_t(kmer_hash) *h = kh_init(kmer_hash); // kh_init_size(kmer_hash, (float)in_kmer_ct * 1.66 );
+	for (uint32_t i = 0; i < in_kmer_ct; i++)
+	{
 		khint_t key = kh_put(kmer_hash, h, mem_comblco[i], &ret);
-		if(ret) kh_value(h, key) = 1;
-		else kh_value(h, key)++;
+		if (ret)
+			kh_value(h, key) = 1;
+		else
+			kh_value(h, key)++;
 	}
-	//uint32_t pan_kmer_ct = 0;
-	Vector mem_pan; vector_init(&mem_pan, sizeof(uint64_t));
-	if(set_opt->operation == 2){ // -u: normal union mode
-		for (khint_t k = kh_begin(h); k != kh_end(h); ++k) {
-  			if (kh_exist(h, k))  vector_push(&mem_pan, &kh_key(h, k)); //mem_pan[pan_kmer_ct++] = kh_key(h, k);   
-  		}
-		write_to_file(test_create_fullpath(set_opt->outdir,lpan_prefix),mem_pan.data, mem_pan.element_size * mem_pan.size);
-	}
-	else if(set_opt->operation == 3){ // -q: uniq union mode	
-		if(!set_opt->q2markerdb){
-			for (khint_t k = kh_begin(h); k != kh_end(h); ++k) {
-                if (kh_exist(h, k) && kh_value(h, k) == 1)  vector_push(&mem_pan, &kh_key(h, k));
-            }
-            write_to_file(test_create_fullpath(set_opt->outdir,luniq_pan_prefix),mem_pan.data, mem_pan.element_size * mem_pan.size);
+	// uint32_t pan_kmer_ct = 0;
+	Vector mem_pan;
+	vector_init(&mem_pan, sizeof(uint64_t));
+	if (set_opt->operation == 2)
+	{ // -u: normal union mode
+		for (khint_t k = kh_begin(h); k != kh_end(h); ++k)
+		{
+			if (kh_exist(h, k))
+				vector_push(&mem_pan, &kh_key(h, k)); // mem_pan[pan_kmer_ct++] = kh_key(h, k);
 		}
-		else{ // genereate markerdb directly instead of uniq union 
-			uint64_t *fco_pos = (uint64_t *)read_from_file( test_get_fullpath(set_opt->insketchpath,idx_sketch_suffix),&file_size);
-    		uint64_t *post_fco_pos = calloc((lco_stat_readin.infile_num + 1),sizeof(uint64_t));
-		    for (uint32_t i = 0; i <lco_stat_readin.infile_num;i++){
-        		for(uint64_t n = fco_pos[i]; n < fco_pos[i+1] ; n++){
-					khint_t k = kh_get(kmer_hash, h, mem_comblco[n]) ;
-            		if(kh_value(h, k) == 1) vector_push(&mem_pan,&mem_comblco[n]);           
-        		}
-        		post_fco_pos[i+1] = mem_pan.size;
-    		}
-    		write_to_file(format_string("%s/%s",set_opt->outdir,combined_sketch_suffix), mem_pan.data, mem_pan.element_size * mem_pan.size);
-		    write_to_file(format_string("%s/%s",set_opt->outdir,idx_sketch_suffix),post_fco_pos,(lco_stat_readin.infile_num+1) * sizeof(post_fco_pos[0]));
-			free_all(fco_pos,post_fco_pos,NULL);
+		write_to_file(test_create_fullpath(set_opt->outdir, lpan_prefix), mem_pan.data, mem_pan.element_size * mem_pan.size);
+	}
+	else if (set_opt->operation == 3)
+	{ // -q: uniq union mode
+		if (!set_opt->q2markerdb)
+		{
+			for (khint_t k = kh_begin(h); k != kh_end(h); ++k)
+			{
+				if (kh_exist(h, k) && kh_value(h, k) == 1)
+					vector_push(&mem_pan, &kh_key(h, k));
+			}
+			write_to_file(test_create_fullpath(set_opt->outdir, luniq_pan_prefix), mem_pan.data, mem_pan.element_size * mem_pan.size);
+		}
+		else
+		{ // genereate markerdb directly instead of uniq union
+			uint64_t *fco_pos = (uint64_t *)read_from_file(test_get_fullpath(set_opt->insketchpath, idx_sketch_suffix), &file_size);
+			uint64_t *post_fco_pos = calloc((lco_stat_readin.infile_num + 1), sizeof(uint64_t));
+			for (uint32_t i = 0; i < lco_stat_readin.infile_num; i++)
+			{
+				for (uint64_t n = fco_pos[i]; n < fco_pos[i + 1]; n++)
+				{
+					khint_t k = kh_get(kmer_hash, h, mem_comblco[n]);
+					if (kh_value(h, k) == 1)
+						vector_push(&mem_pan, &mem_comblco[n]);
+				}
+				post_fco_pos[i + 1] = mem_pan.size;
+			}
+			write_to_file(format_string("%s/%s", set_opt->outdir, combined_sketch_suffix), mem_pan.data, mem_pan.element_size * mem_pan.size);
+			write_to_file(format_string("%s/%s", set_opt->outdir, idx_sketch_suffix), post_fco_pos, (lco_stat_readin.infile_num + 1) * sizeof(post_fco_pos[0]));
+			free_all(fco_pos, post_fco_pos, NULL);
 		}
 	}
-	else err(EINVAL,"operation value %d neither 2 (-u: union) nor 3 (-q :uniq uion )",set_opt->operation);
-	kh_destroy(kmer_hash, h);  vector_free(&mem_pan);
-	free_all(mem_stat,mem_comblco,NULL);	
-  return 1;
-}
-
-KHASH_SET_INIT_INT64(kmer_set)
-int lsketch_operate(set_opt_t* set_opt){
-clock_t start_time = clock();
-	void *mem_stat_pan = read_from_file( test_get_fullpath(set_opt->pansketchpath,sketch_stat) , &file_size);
-	memcpy(&lco_stat_pan,mem_stat_pan,sizeof(lco_stat_pan));
-	void *mem_stat_lco = read_from_file( test_get_fullpath(set_opt->insketchpath,sketch_stat), &file_size);
-	memcpy(&lco_stat_origin, mem_stat_lco,sizeof(lco_stat_origin));
-	if (lco_stat_pan.hash_id != lco_stat_origin.hash_id) err(EXIT_FAILURE,"%s(): %s sketcing id %u != %s id %u",__func__,set_opt->pansketchpath, lco_stat_origin.hash_id, set_opt->insketchpath, lco_stat_pan.hash_id);	
-	if(lco_stat_origin.koc) printf("%s() Warning: k-mer abundances are dropped in this sketch operation\n ",__func__);
-//copy sketch stat file to result sketch
-	write_to_file(test_create_fullpath(set_opt->outdir,sketch_stat),mem_stat_lco,file_size);
-
-	char *lco_fpath; 
-	if( (lco_fpath = test_get_fullpath(set_opt->pansketchpath,lpan_prefix)) == NULL && (lco_fpath = test_get_fullpath(set_opt->pansketchpath,luniq_pan_prefix)) == NULL  )
-		err(EXIT_FAILURE,"%s():cannot find %s or %s under %s ",__func__,lpan_prefix,luniq_pan_prefix, set_opt->pansketchpath);
-	uint64_t *mem_pan = (uint64_t *)read_from_file(lco_fpath,&file_size);			
-  khash_t(kmer_set) *h = kh_init(kmer_set); 
-  uint32_t kmer_ct = file_size/sizeof(uint64_t);
-	for(int i = 0 ; i< kmer_ct; i++) kh_put(kmer_set,h,mem_pan[i],&ret);
-  //read comblco.index to mem	
-	uint64_t *fco_pos = (uint64_t *)read_from_file( test_get_fullpath(set_opt->insketchpath,idx_sketch_suffix),&file_size);
-	// post operation index	calloc	 
- 	uint64_t *post_fco_pos = calloc((lco_stat_origin.infile_num + 1),sizeof(uint64_t));	
-	//read comblco to mem
-	uint64_t *tmp_comblco_mem = (uint64_t *)read_from_file( test_get_fullpath(set_opt->insketchpath,combined_sketch_suffix),&file_size);
-	uint64_t *post_comblco_mem = (uint64_t *) malloc(file_size); uint32_t post_kmer_ct = 0;
-   
-	// sketch operation
-	for (uint32_t i = 0; i <lco_stat_origin.infile_num;i++){
-		for(uint64_t n = fco_pos[i]; n < fco_pos[i+1] ; n++){
-			 //make sure set_opt->operation == 0 if subtract, == 1 if intersect
-			if(set_opt->operation == (kh_get(kmer_set, h, tmp_comblco_mem[n]) != kh_end(h)) )
-				post_comblco_mem[post_kmer_ct++] = tmp_comblco_mem[n];				
-		}
-		post_fco_pos[i+1] = post_kmer_ct;
-	}
-	kh_destroy(kmer_set,h);
- //write to result comblco
-  sprintf(outfpath,"%s/%s",set_opt->outdir,combined_sketch_suffix);
-	write_to_file(outfpath,post_comblco_mem,post_kmer_ct * sizeof(post_comblco_mem[0]));
-//write index
-	sprintf(outfpath,"%s/%s",set_opt->outdir,idx_sketch_suffix);
-	write_to_file(outfpath,post_fco_pos,(lco_stat_origin.infile_num+1) * sizeof(post_fco_pos[0]));
-
-	free_all(mem_stat_pan, mem_stat_lco,lco_fpath,mem_pan,fco_pos, post_fco_pos, tmp_comblco_mem,post_comblco_mem,NULL);
+	else
+		err(EINVAL, "operation value %d neither 2 (-u: union) nor 3 (-q :uniq uion )", set_opt->operation);
+	kh_destroy(kmer_hash, h);
+	vector_free(&mem_pan);
+	free_all(mem_stat, mem_comblco, NULL);
 	return 1;
 }
 
+KHASH_SET_INIT_INT64(kmer_set)
+int lsketch_operate(set_opt_t *set_opt)
+{
+	clock_t start_time = clock();
+	void *mem_stat_pan = read_from_file(test_get_fullpath(set_opt->pansketchpath, sketch_stat), &file_size);
+	memcpy(&lco_stat_pan, mem_stat_pan, sizeof(lco_stat_pan));
+	void *mem_stat_lco = read_from_file(test_get_fullpath(set_opt->insketchpath, sketch_stat), &file_size);
+	memcpy(&lco_stat_origin, mem_stat_lco, sizeof(lco_stat_origin));
+	if (lco_stat_pan.hash_id != lco_stat_origin.hash_id)
+		err(EXIT_FAILURE, "%s(): %s sketcing id %u != %s id %u", __func__, set_opt->pansketchpath, lco_stat_origin.hash_id, set_opt->insketchpath, lco_stat_pan.hash_id);
+	if (lco_stat_origin.koc)
+		printf("%s() Warning: k-mer abundances are dropped in this sketch operation\n ", __func__);
+	// copy sketch stat file to result sketch
+	write_to_file(test_create_fullpath(set_opt->outdir, sketch_stat), mem_stat_lco, file_size);
 
+	char *lco_fpath;
+	if (file_exists_in_folder(set_opt->pansketchpath, lpan_prefix))
+		lco_fpath = test_get_fullpath(set_opt->pansketchpath, lpan_prefix);
+	else if (file_exists_in_folder(set_opt->pansketchpath, luniq_pan_prefix))
+		lco_fpath = test_get_fullpath(set_opt->pansketchpath, luniq_pan_prefix);
+	else
+		err(EXIT_FAILURE, "%s():cannot find %s or %s under %s ", __func__, lpan_prefix, luniq_pan_prefix, set_opt->pansketchpath);
 
-int lgrouping_genomes(set_opt_t* set_opt){ // for sorted lcombco only !!! old unsorted one not suportted
+	uint64_t *mem_pan = (uint64_t *)read_from_file(lco_fpath, &file_size);
+	khash_t(kmer_set) *h = kh_init(kmer_set);
+	uint32_t kmer_ct = file_size / sizeof(uint64_t);
+	for (int i = 0; i < kmer_ct; i++)
+		kh_put(kmer_set, h, mem_pan[i], &ret);
+	// read comblco.index to mem
+	uint64_t *fco_pos = (uint64_t *)read_from_file(test_get_fullpath(set_opt->insketchpath, idx_sketch_suffix), &file_size);
+	// post operation index	calloc
+	uint64_t *post_fco_pos = calloc((lco_stat_origin.infile_num + 1), sizeof(uint64_t));
+	// read comblco to mem
+	uint64_t *tmp_comblco_mem = (uint64_t *)read_from_file(test_get_fullpath(set_opt->insketchpath, combined_sketch_suffix), &file_size);
+	uint64_t *post_comblco_mem = (uint64_t *)malloc(file_size);
+	uint32_t post_kmer_ct = 0;
 
-	void *mem_stat = read_from_file( test_get_fullpath(set_opt->insketchpath,sketch_stat) , &file_size);
-	memcpy(&lco_stat_readin,mem_stat,sizeof(lco_stat_readin));
-		
-	compan_t *subset = organize_taxf(set_opt->subsetf);
-	if(lco_stat_readin.infile_num != subset->gn)  err(EXIT_FAILURE,"%s(): %s's genome number %d != %s's line number %d",__func__,set_opt->insketchpath,lco_stat_readin.infile_num,set_opt->subsetf,subset->gn);
- 
-//read index and comblco
-	uint64_t *tmp_idx = (uint64_t *)read_from_file( test_get_fullpath(set_opt->insketchpath,idx_sketch_suffix), &file_size);
-	uint64_t *mem_comblco = (uint64_t *)read_from_file( test_get_fullpath(set_opt->insketchpath,combined_sketch_suffix), &file_size);
-
-	if(tmp_idx[subset->gn]*sizeof(uint64_t) != file_size) err(EXIT_FAILURE,"%s(): %s last(%u) index(%lu) * sizeof(uint64_t) != %s file size (%lu) ", \
-			 __func__,idx_sketch_suffix,subset->gn,tmp_idx[subset->gn], combined_sketch_suffix ,file_size);
-// out index and comblco
-	char *lcombco_f = test_create_fullpath(set_opt->outdir,combined_sketch_suffix); 
-	int fd = open(lcombco_f, O_CREAT | O_RDWR, 0644);
-	ftruncate(fd, file_size);  // allowing much larger grouped_comblco than using malloc
-	uint64_t *grouped_comblco = (uint64_t *)mmap(NULL, file_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
- 	
-	uint64_t *out_idx  = calloc( (subset->taxn+1), sizeof(uint64_t));
-  int outfn = 0; //uint64_t grouped_kmer_ct = 0;
-
-	for(int t = 0; t < subset->taxn; t++){
-		if(subset->tax[t].taxid == 0) continue;// ignore taxid 0		
-		outfn++;
-		uint64_t start_offset = out_idx[outfn] = out_idx[outfn-1];	
-		for(int n = 1; n <= subset->tax[t].gids[0];n++){
-			int gid = subset->tax[t].gids[n] ;
-			memcpy(grouped_comblco + start_offset , mem_comblco + tmp_idx[gid], (tmp_idx[gid+1] - tmp_idx[gid]) * sizeof(grouped_comblco[0]));		
-			start_offset += (tmp_idx[gid+1] - tmp_idx[gid]);
+	// sketch operation
+	for (uint32_t i = 0; i < lco_stat_origin.infile_num; i++)
+	{
+		for (uint64_t n = fco_pos[i]; n < fco_pos[i + 1]; n++)
+		{
+			// make sure set_opt->operation == 0 if subtract, == 1 if intersect
+			if (set_opt->operation == (kh_get(kmer_set, h, tmp_comblco_mem[n]) != kh_end(h)))
+				post_comblco_mem[post_kmer_ct++] = tmp_comblco_mem[n];
 		}
-		
-		if (subset->tax[t].gids[0] > 1){
-			qsort(grouped_comblco + out_idx[outfn], start_offset - out_idx[outfn], sizeof(grouped_comblco[0]),qsort_comparator_uint64);
-			size_t len = dedup_sorted_uint64(grouped_comblco + out_idx[outfn], start_offset - out_idx[outfn] );
-			out_idx[outfn] += len;
-		}
-		else out_idx[outfn] = start_offset;	
+		post_fco_pos[i + 1] = post_kmer_ct;
 	}
-	//write grouped kmer and index to result
-	//write_to_file(test_create_fullpath(set_opt->outdir,combined_sketch_suffix), grouped_comblco, grouped_kmer_ct*sizeof(grouped_comblco[0]));
-	if (msync(grouped_comblco, out_idx[outfn] * sizeof(grouped_comblco[0]), MS_SYNC) == -1)  err(EXIT_FAILURE,"%s(): msync error", __func__);
-	if (ftruncate(fd, out_idx[outfn] * sizeof(grouped_comblco[0])) == -1) err(EXIT_FAILURE,"%s(): ftrucate resize failed", __func__);
-	if (munmap(grouped_comblco, file_size) == -1) err(EXIT_FAILURE,"%s(): munmap", __func__); 
-	close(fd);
+	kh_destroy(kmer_set, h);
+	// write to result comblco
+	sprintf(outfpath, "%s/%s", set_opt->outdir, combined_sketch_suffix);
+	write_to_file(outfpath, post_comblco_mem, post_kmer_ct * sizeof(post_comblco_mem[0]));
+	// write index
+	sprintf(outfpath, "%s/%s", set_opt->outdir, idx_sketch_suffix);
+	write_to_file(outfpath, post_fco_pos, (lco_stat_origin.infile_num + 1) * sizeof(post_fco_pos[0]));
 
-  write_to_file(test_create_fullpath(set_opt->outdir,idx_sketch_suffix), out_idx, (outfn+1)*sizeof(out_idx[0]));
-	//write stat file 
-	lco_stat_readin.infile_num = outfn; lco_stat_readin.koc = 0;
-	char (*tmpfname)[PATHLEN] = malloc(outfn * PATHLEN); int idx = 0;
-  for(int t=0;t<subset->taxn;t++){
-    if(subset->tax[t].taxid != 0) {
-      if(subset->tax[t].taxname != NULL)
-        sprintf(tmpfname[idx],"%d_%s",subset->tax[t].taxid,subset->tax[t].taxname);
-      else sprintf(tmpfname[idx],"%d",subset->tax[t].taxid);
-      idx++;
-    }
-    free_all(subset->tax[t].gids, subset->tax[t].taxname,NULL);
-  }
-	concat_and_write_to_file(test_create_fullpath(set_opt->outdir,sketch_stat),&lco_stat_readin,sizeof(lco_stat_readin),tmpfname,PATHLEN*outfn);
-	if (munmap(mem_comblco, file_size) == -1) {
-		if(mem_comblco != NULL) free(mem_comblco);
-		else
-		 err(EXIT_FAILURE,"%s(): munmap", __func__);
-	}
-	
-	free_all( mem_stat,tmp_idx,out_idx,subset->tax,subset,tmpfname,NULL );
- 	return outfn;
+	free_all(mem_stat_pan, mem_stat_lco, lco_fpath, mem_pan, fco_pos, post_fco_pos, tmp_comblco_mem, post_comblco_mem, NULL);
+	return 1;
 }
 
+int lgrouping_genomes(set_opt_t *set_opt)
+{ // for sorted lcombco only !!! old unsorted one not suportted
 
+	void *mem_stat = read_from_file(test_get_fullpath(set_opt->insketchpath, sketch_stat), &file_size);
+	memcpy(&lco_stat_readin, mem_stat, sizeof(lco_stat_readin));
 
+	compan_t *subset = organize_taxf(set_opt->subsetf);
+	if (lco_stat_readin.infile_num != subset->gn)
+		err(EXIT_FAILURE, "%s(): %s's genome number %d != %s's line number %d", __func__, set_opt->insketchpath, lco_stat_readin.infile_num, set_opt->subsetf, subset->gn);
 
+	// read index and comblco
+	uint64_t *tmp_idx = (uint64_t *)read_from_file(test_get_fullpath(set_opt->insketchpath, idx_sketch_suffix), &file_size);
+	uint64_t *mem_comblco = (uint64_t *)read_from_file(test_get_fullpath(set_opt->insketchpath, combined_sketch_suffix), &file_size);
 
+	if (tmp_idx[subset->gn] * sizeof(uint64_t) != file_size)
+		err(EXIT_FAILURE, "%s(): %s last(%u) index(%lu) * sizeof(uint64_t) != %s file size (%lu) ",
+			__func__, idx_sketch_suffix, subset->gn, tmp_idx[subset->gn], combined_sketch_suffix, file_size);
+	// out index and comblco
+	char *lcombco_f = test_create_fullpath(set_opt->outdir, combined_sketch_suffix);
+	int fd = open(lcombco_f, O_CREAT | O_RDWR, 0644);
+	ftruncate(fd, file_size); // allowing much larger grouped_comblco than using malloc
+	uint64_t *grouped_comblco = (uint64_t *)mmap(NULL, file_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 
+	uint64_t *out_idx = calloc((subset->taxn + 1), sizeof(uint64_t));
+	int outfn = 0; // uint64_t grouped_kmer_ct = 0;
 
+	for (int t = 0; t < subset->taxn; t++)
+	{
+		if (subset->tax[t].taxid == 0)
+			continue; // ignore taxid 0
+		outfn++;
+		uint64_t start_offset = out_idx[outfn] = out_idx[outfn - 1];
+		for (int n = 1; n <= subset->tax[t].gids[0]; n++)
+		{
+			int gid = subset->tax[t].gids[n];
+			memcpy(grouped_comblco + start_offset, mem_comblco + tmp_idx[gid], (tmp_idx[gid + 1] - tmp_idx[gid]) * sizeof(grouped_comblco[0]));
+			start_offset += (tmp_idx[gid + 1] - tmp_idx[gid]);
+		}
 
+		if (subset->tax[t].gids[0] > 1)
+		{
+			qsort(grouped_comblco + out_idx[outfn], start_offset - out_idx[outfn], sizeof(grouped_comblco[0]), qsort_comparator_uint64);
+			size_t len = dedup_sorted_uint64(grouped_comblco + out_idx[outfn], start_offset - out_idx[outfn]);
+			out_idx[outfn] += len;
+		}
+		else
+			out_idx[outfn] = start_offset;
+	}
+	// write grouped kmer and index to result
+	// write_to_file(test_create_fullpath(set_opt->outdir,combined_sketch_suffix), grouped_comblco, grouped_kmer_ct*sizeof(grouped_comblco[0]));
+	if (msync(grouped_comblco, out_idx[outfn] * sizeof(grouped_comblco[0]), MS_SYNC) == -1)
+		err(EXIT_FAILURE, "%s(): msync error", __func__);
+	if (ftruncate(fd, out_idx[outfn] * sizeof(grouped_comblco[0])) == -1)
+		err(EXIT_FAILURE, "%s(): ftrucate resize failed", __func__);
+	if (munmap(grouped_comblco, file_size) == -1)
+		err(EXIT_FAILURE, "%s(): munmap", __func__);
+	close(fd);
 
+	write_to_file(test_create_fullpath(set_opt->outdir, idx_sketch_suffix), out_idx, (outfn + 1) * sizeof(out_idx[0]));
+	// write stat file
+	lco_stat_readin.infile_num = outfn;
+	lco_stat_readin.koc = 0;
+	char (*tmpfname)[PATHLEN] = malloc(outfn * PATHLEN);
+	int idx = 0;
+	for (int t = 0; t < subset->taxn; t++)
+	{
+		if (subset->tax[t].taxid != 0)
+		{
+			if (subset->tax[t].taxname != NULL)
+				sprintf(tmpfname[idx], "%d_%s", subset->tax[t].taxid, subset->tax[t].taxname);
+			else
+				sprintf(tmpfname[idx], "%d", subset->tax[t].taxid);
+			idx++;
+		}
+		free_all(subset->tax[t].gids, subset->tax[t].taxname, NULL);
+	}
+	concat_and_write_to_file(test_create_fullpath(set_opt->outdir, sketch_stat), &lco_stat_readin, sizeof(lco_stat_readin), tmpfname, PATHLEN * outfn);
+	if (munmap(mem_comblco, file_size) == -1)
+	{
+		if (mem_comblco != NULL)
+			free(mem_comblco);
+		else
+			err(EXIT_FAILURE, "%s(): munmap", __func__);
+	}
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+	free_all(mem_stat, tmp_idx, out_idx, subset->tax, subset, tmpfname, NULL);
+	return outfn;
+}

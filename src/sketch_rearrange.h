@@ -104,7 +104,7 @@ static inline ctxgidobj_t uint64_ctxobj2ctxgidobj96( uint64_t ctxobj64, uint32_t
 //coden aware context object pattern
 // may set to >10 for unassembled data  
 #ifndef NUM_CODENS
-#define NUM_CODENS 11 
+#define NUM_CODENS 11
 #endif   
 static inline uint64_t generate_coden_pattern64 (){
     uint64_t pattern = 0;
@@ -121,18 +121,19 @@ static inline uint64_t generate_coden_pattern64 (){
     return pattern;
 }
 
+#if NUM_CODENS < 11
 // in case need to recovery unituple or k-mer from coden pattern 
 static inline uint64_t reverse_reorder_unituple_by_coden_pattern64 (uint64_t value){
-    uint64_t unituple = value & 0x3;
+    uint64_t unituple = 0;
     uint64_t high = value >> (2 * (NUM_CODENS + 1));
  
     #pragma unroll
     for (int i = 0; i < NUM_CODENS; ++i) {
-        unituple = (unituple << 4) | (high & 0xF);
+        unituple |= (((high & 0xF) <<  2) | (value & 0x3)) << (6*i);  ;
         value >>= 2;
-        unituple = (unituple << 2) | (value & 0x3);
         high >>= 4;
     }
+    unituple |= ((value & 0x3) << (6 * NUM_CODENS));
     return unituple;
 }  
 
@@ -146,12 +147,52 @@ static inline uint64_t reorder_unituple_by_coden_pattern64 (uint64_t unituple) {
     for (int i = 0; i < NUM_CODENS; ++i) {
      
         unituple >>= 2;
-        high = (high << 4) | unituple & 0xF;
+        high |= ((unituple & 0xF) << (4*i)) ;
         unituple >>= 4;
-        low = (low << 2) | (unituple & 0x3);
+        low |= ((unituple & 0x3) << (2*i)) ;
     }
     return (high << 2*(NUM_CODENS+1)) | low; // Combine high and low parts
 }
+
+#else //NUM_CODENS >= 11, no outter obj part
+
+// in case need to recovery unituple or k-mer from coden pattern 
+static inline uint64_t reverse_reorder_unituple_by_coden_pattern64 (uint64_t value){
+    uint64_t unituple = 0;
+    uint64_t high = value >> 20;
+ 
+    #pragma unroll
+    for (int i = 0; i < 10; ++i) {
+
+        unituple |= ((((value & 0x3) << 4) | (high & 0xF)  ) << (6*i)) ;
+        high >>= 4;
+        value >>= 2;
+    }
+    unituple |= ((high & 0xF) << 60);
+    return unituple;
+}  
+
+// Reorders a right-aligned pattern: 11_001111 x 10 
+// Each block = [low2][high4] -> 6 bits
+// Pattern occupies lowest (6 * NUM_BLOCKS + 2) bits
+static inline uint64_t reorder_unituple_by_coden_pattern64 (uint64_t unituple) {
+// need reorder NUM_CODENS of blocks high (to ctx) and NUM_CODENS + 1 of blocks low (to obj)
+    uint64_t high = 0, low = 0; 
+    #pragma unroll
+    for (int i = 0; i < 10; ++i) {  
+        high |=  ((unituple & 0xF) << (4*i));
+        unituple >>= 4;
+        low |= ((unituple & 0x3) << (2*i)) ;
+        unituple >>= 2;
+    }  
+    high |=  ((unituple & 0xF) << 40);
+    return ((high << 20) | low); // Combine high and low parts
+}
+
+
+#endif
+
+
 
 
 
