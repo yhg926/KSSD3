@@ -43,7 +43,7 @@ void compute_sketch(sketch_opt_t *sketch_opt_val, infile_tab_t *infile_stat)
 {
     if (sketch_opt_val->split_mfa)
     { // mfa files parse
-        mfa2sortedctxobj64(sketch_opt_val, infile_stat);
+        mfa2sortedctxobj64_v2(sketch_opt_val, infile_stat);
         return;
     }
     // test_read_genomes2mem2sortedctxobj64(sketch_opt_val, infile_stat, 1000);
@@ -361,6 +361,8 @@ int merge_comblco(sketch_opt_t *sketch_opt_val)
 
     return comblco_stat_one.infile_num;
 }
+
+
 
 KHASH_MAP_INIT_INT64(kmer_hash, int)
 void mfa2sortedctxobj64(sketch_opt_t *sketch_opt_val, infile_tab_t *infile_stat)
@@ -1573,4 +1575,187 @@ simple_sketch_t *simple_genomes2mem2sortedctxobj64_mem(infile_tab_t *infile_stat
     ret->sketch_index = sketch_index; // length = nfiles+1
     ret->infile_num = nfiles;
     return ret;
+}
+
+
+
+typedef struct {
+    char *name;
+    char *seq;
+    int   len;
+} mfa_seq_t;
+
+#define MFA_SEQ_BATCH 128
+
+void mfa2sortedctxobj64_v2 (sketch_opt_t *sketch_opt_val, infile_tab_t *infile_stat)
+{
+    const bool resolve_conf = !sketch_opt_val->conflict;
+    const int  nthreads     = sketch_opt_val->p;
+
+    uint64_t totle_sketch_size = 0;   // cumulative across all sequences
+
+    // ---- global index: one entry per "genome" (sequence), plus 0 at the front ----
+    u64vec sketch_index;
+    v_init(&sketch_index, 1024);      // initial capacity
+    v_push(&sketch_index, 0ULL);      // index[0] = 0
+
+    // tmpname: one name per genome (sequence)
+    int tmpname_size_alloc = (int)sketch_index.cap;
+    char (*tmpname)[PATHLEN] = malloc((size_t)tmpname_size_alloc * PATHLEN);
+    if (!tmpname)
+        err(errno, "%s(): Memory allocation failed for tmpname", __func__);
+
+    // combined sketch file (keys only)
+    FILE *comb_sketch_fp =
+        fopen(format_string("%s/%s", sketch_opt_val->outdir, combined_sketch_suffix), "wb");
+    if (!comb_sketch_fp)
+        err(errno, "%s() open file error: %s/%s",
+            __func__, sketch_opt_val->outdir, combined_sketch_suffix);
+    setvbuf(comb_sketch_fp, NULL, _IOFBF, 8u << 20);
+
+    // =========================
+    //  loop over MFA *files*
+    // =========================
+    for (int fi = 0; fi < infile_stat->infile_num; ++fi) {
+        char *seqfname = infile_stat->organized_infile_tab[fi].fpath;
+
+        gzFile infile = gzopen(seqfname, "r");
+        if (!infile)
+            err(errno, "mfa2sortedctxobj64(): Cannot open file %s", seqfname);
+
+        kseq_t *seq = kseq_init(infile);
+
+        for (;;) {
+            mfa_seq_t seqs[MFA_SEQ_BATCH];
+            int       nseq = 0;
+            int       ret;
+            bool      eof = false;
+
+            // -------- read up to MFA_SEQ_BATCH usable sequences into this batch --------
+            while (nseq < MFA_SEQ_BATCH) {
+                ret = kseq_read(seq);
+                if (ret < 0) {  // EOF or error
+                    eof = true;
+                    break;
+                }
+
+                if (seq->seq.l <= klen)
+                    continue;   // too short for any k-mer; don't treat as genome
+
+                seqs[nseq].len = (int)seq->seq.l;
+
+                // copy sequence
+                seqs[nseq].seq = (char *)malloc((size_t)seq->seq.l);
+                if (!seqs[nseq].seq)
+                    err(errno, "%s(): OOM for seq string", __func__);
+                memcpy(seqs[nseq].seq, seq->seq.s, (size_t)seq->seq.l);
+
+                // copy name
+                seqs[nseq].name = strdup(seq->name.s);
+                if (!seqs[nseq].name)
+                    err(errno, "%s(): OOM for seq name", __func__);
+
+                ++nseq;
+            }
+
+            if (nseq == 0) {
+                // no usable sequences in this batch
+                if (eof) break;  // finished this file
+                else continue;   // only short sequences encountered; keep reading
+            }
+
+            // -------- parallel sketch & KV build per sequence in this batch --------
+            uint64_t **keys = (uint64_t **)calloc((size_t)nseq, sizeof(uint64_t *));
+            uint64_t  *lens = (uint64_t  *)calloc((size_t)nseq, sizeof(uint64_t));
+            if (!keys || !lens)
+                err(errno, "%s(): OOM for per-sequence KV arrays", __func__);
+
+            #pragma omp parallel for num_threads(nthreads) schedule(dynamic, 1)
+            for (int si = 0; si < nseq; ++si) {
+                u64vec vec;
+                v_init(&vec, 1u << 15);
+
+                sketch_read_into_vec(seqs[si].seq,seqs[si].len,&vec,
+                                    ctxmask,tupmask,Bitslen.obj,klen);
+
+                if (vec.n) {
+                    // no abundance, no kmerocrs: just dedup + sort, get counts we discard
+                    SortedKV_Arrays_t kv = build_kv_from_vec(&vec, false);
+
+                    if (resolve_conf)
+                        remove_ctx_with_conflict_obj_noabund(kv.keys, &kv.len, Bitslen.obj);
+
+                    keys[si] = kv.keys;
+                    lens[si] = kv.len;
+
+                    free(kv.values);  // counts not kept in MFA mode
+                } else {
+                    lens[si] = 0;
+                }
+
+                v_free(&vec);
+            }
+
+            // -------- serial write in original sequence order for this batch --------
+            for (int si = 0; si < nseq; ++si) {
+                // ensure tmpname capacity (sketch_index.n == #genomes_so_far + 1)
+                if ((int)sketch_index.n >= tmpname_size_alloc) {
+                    tmpname_size_alloc += 1000;
+                    char (*newtmp)[PATHLEN] =
+                        realloc(tmpname, (size_t)tmpname_size_alloc * PATHLEN);
+                    if (!newtmp)
+                        err(errno, "%s(): Realloc failed for tmpname", __func__);
+                    tmpname = newtmp;
+                }
+
+                // record this sequence name (one per genome)
+                replace_special_chars_with_underscore(seqs[si].name);
+                strncpy(tmpname[sketch_index.n - 1], seqs[si].name, PATHLEN);
+
+                // write keys for this sequence
+                if (lens[si])
+                    fwrite(keys[si], sizeof(uint64_t), lens[si], comb_sketch_fp);
+
+                totle_sketch_size += lens[si];
+                v_push(&sketch_index, totle_sketch_size);
+
+                free(keys[si]);
+            }
+
+            free(keys);
+            free(lens);
+
+            // free per-sequence buffers for this batch
+            for (int si = 0; si < nseq; ++si) {
+                free(seqs[si].seq);
+                free(seqs[si].name);
+            }
+
+            if (eof) break;  // we've reached end of file
+        } // end per-file batches
+
+        kseq_destroy(seq);
+        gzclose(infile);
+
+        fprintf(stderr, "\r%dth/%d multifasta file %s completed!\t #genomes=%lu",
+                fi + 1,
+                infile_stat->infile_num,
+                infile_stat->organized_infile_tab[fi].fpath,
+                (unsigned long)(sketch_index.n - 1));
+        if (fi == infile_stat->infile_num - 1) fprintf(stderr, "\n");
+    } // for each file
+
+    fclose(comb_sketch_fp);
+
+    // write global index & stat
+    write_to_file(test_create_fullpath(sketch_opt_val->outdir, idx_sketch_suffix),
+                  sketch_index.a,sketch_index.n * sizeof(uint64_t));
+
+    comblco_stat_one.infile_num = (uint32_t)(sketch_index.n - 1);
+    concat_and_write_to_file(test_create_fullpath(sketch_opt_val->outdir, sketch_stat),
+                             &comblco_stat_one,sizeof(comblco_stat_one),tmpname,
+                             (size_t)comblco_stat_one.infile_num * PATHLEN);
+
+    v_free(&sketch_index);
+    free(tmpname);
 }
