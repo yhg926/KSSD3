@@ -1709,7 +1709,7 @@ void mfa2sortedctxobj64_v2 (sketch_opt_t *sketch_opt_val, infile_tab_t *infile_s
                 }
 
                 // record this sequence name (one per genome)
-                replace_special_chars_with_underscore(seqs[si].name);
+               // replace_special_chars_with_underscore(seqs[si].name);
                 strncpy(tmpname[sketch_index.n - 1], seqs[si].name, PATHLEN);
 
                 // write keys for this sequence
