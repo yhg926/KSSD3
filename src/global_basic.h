@@ -210,6 +210,39 @@ static inline int isOK_fmt_infile(char *fname, const char *test_fmt[], int test_
   return ret;
 };
 
+
+// char check functions
+static inline int is_dangerous(char c) {
+    switch (c) {
+        case '\0': case '\n': case '\r': case '\t': case '\\':
+        case '"':  case '\'': case '|': case '>': case '<':
+        case '$':  case '&':  case ';': case '*': case '?':
+        case '#':  case '!':  case '%': case '@':
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static inline int is_bad_for_tokenizing(char c) {
+    return (c == ' '  || c == '\t' || c == '\n' ||
+            c == '\r' || c == '|'  || c == ','  ||
+            c == '"'  || c == '\\' || (unsigned char)c < 32);
+}
+
+static inline int is_allowed_char(char c) {
+    if (c >= 'A' && c <= 'Z') return 1;
+    if (c >= 'a' && c <= 'z') return 1;
+    if (c >= '0' && c <= '9') return 1;
+    if (c == '_' || c == '-' || c == '.') return 1;
+    return 0;
+}
+
+static inline int is_special(char c) {
+    return !is_allowed_char(c);
+}
+
+
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
